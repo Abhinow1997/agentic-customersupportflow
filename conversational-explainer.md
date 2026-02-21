@@ -3,7 +3,7 @@
 *(Spoiler: Very. But also — this is actually solvable. Stick with me.)*
 ---
 
-![Header_Image](/agentic-customersupportflow/static/images/proposal_headline.png "Hero Image")
+![Header_Image](/static/images/proposal_headline.png "Hero Image")
 
 You've sent an angry email to a company before, right?
 
@@ -103,7 +103,7 @@ Four agents. One coordinated pipeline. Each one ignorant of the others' concerns
 
 **Wait — four AI agents? Are they like, talking to each other?**
 
-![Robots_Talking_Image](/agentic-customersupportflow/static/images/agents_flow.png "Robots Talking Image")
+![Robots_Talking_Image](/static/images/agents_flow.png "Robots Talking Image")
 
 Yes. And that's exactly what makes this architecture *interesting* rather than just "a really long prompt."
 
@@ -138,7 +138,7 @@ The problem is *consistency at scale*. A mid-size e-commerce company handles som
 
 "Address all issues" in a prompt is an *instruction*. The Supervisor Agent checking a structured list is a *verification mechanism*. One relies on the model following directions under all conditions. The other actually counts.
 
-![The Math Problem](/agentic-customersupportflow/static/images/maths_problem.png "The Math Problem")
+![The Math Problem](/static/images/maths_problem.png "The Math Problem")
 
 Here's a way to think about this mathematically — and then I'll explain it in plain English too, don't worry.
 
@@ -160,7 +160,7 @@ ChatGPT doesn't know your return window is 30 days. It doesn't know you can offe
 
 SupportFlow's Response Agent uses **RAG** — Retrieval Augmented Generation — which means before drafting a single sentence, it queries an actual knowledge base of real company documents. It retrieves the relevant policy chunks and grounds every claim in a verified source:
 
-![RAG Element](/agentic-customersupportflow/static/images/rag_element.png "RAG Element")
+![RAG Element](/static/images/rag_element.png "RAG Element")
 
 ```
 Query: "size exchange policy eligibility"
@@ -188,7 +188,7 @@ SupportFlow is not an autonomous system. It is a human-assist system. That disti
 
 Every response the pipeline generates — regardless of how clean the triage was, how accurate the routing, how grounded the citations — lands on a human agent's screen before it reaches a customer. The agents don't send. Humans send. The pipeline's job is to make sure the human who sends it has the clearest possible picture of what they're approving: what issues were found, what priority was assigned, what policy was cited, what confidence the Supervisor placed on the output, and critically — what the system is not sure about.
 
-![Trigger Actions Element](/agentic-customersupportflow/static/images/triggers_section.png "Trigger Actions Element")
+![Trigger Actions Element](/static/images/triggers_section.png "Trigger Actions Element")
 
 Think of it less like autopilot and more like a very thorough co-pilot who has already done the pre-flight checklist, flagged the turbulence ahead, and pulled up the relevant sections of the manual — and is now handing you the controls.
 
@@ -235,7 +235,7 @@ The complaint inputs — the raw customer messages the pipeline actually process
 
 The goal was to make every layer of the demo honest — not production-scale, but structurally sound. If it works here, the path to real data is a configuration change, not a redesign.
 
-[Technical-Version](/agentic-customersupportflow/technical-version.md)
+[Technical-Version](/technical-version.md)
 
 ---
 

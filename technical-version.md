@@ -272,3 +272,11 @@ A response that appears polished but fails any of:
 
 These are integration constraints, not architecture blockers.
 
+## Source Data Point References:
+
+1. [Bitext. (2023). Customer Support Dataset. HuggingFace Datasets.](https://huggingface.co/datasets/bitext/Bitext-retail-ecommerce-llm-chatbot-training-dataset)
+2. [Sample Customer data: TPC-DS](https://docs.snowflake.com/en/user-guide/sample-data-tpcds#database-entities-relationships-and-characteristics)
+3. [TPC-DS : Schema Defination](https://www.tpc.org/TPC_Documents_Current_Versions/pdf/TPC-DS_v2.5.0.pdf)
+4. [OpenAI wisper](https://github.com/openai/whisper)
+5. [Walmart's US Product-quality-and-compliance-Manual](https://corporate.walmart.com/content/dam/corporate/documents/suppliers/requirements/compliance-areas/u-s-product-quality-and-compliance-manual.pdf)
+---

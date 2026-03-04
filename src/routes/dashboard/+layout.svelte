@@ -27,9 +27,9 @@
     <nav class="nav">
       <a href="/dashboard" class="nav-item active">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+          <path d="M3 10h18M3 14h18M10 3l-7 7 7 7M14 3l7 7-7 7"/>
         </svg>
-        Ticket Queue
+        Returned Items
       </a>
       <a href="/dashboard" class="nav-item disabled">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

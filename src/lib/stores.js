@@ -1,8 +1,23 @@
 // src/lib/stores.js
-import { writable, derived } from 'svelte/store';
+import { writable, derived } from 'svelte/store'; // derived still used for selectedTicket
+import { MOCK_TICKETS } from './data.js';
 
-// Auth store
-export const session = writable(null);
+// Auth store — persisted to sessionStorage so HMR reloads and refreshes don't wipe the login
+function makePersistedSession() {
+  let initial = null;
+  if (typeof sessionStorage !== 'undefined') {
+    try { initial = JSON.parse(sessionStorage.getItem('arcella_session')); } catch {}
+  }
+  const store = writable(initial);
+  store.subscribe(val => {
+    if (typeof sessionStorage !== 'undefined') {
+      if (val) sessionStorage.setItem('arcella_session', JSON.stringify(val));
+      else     sessionStorage.removeItem('arcella_session');
+    }
+  });
+  return store;
+}
+export const session = makePersistedSession();
 
 // Tickets — loaded from /api/tickets
 export const tickets        = writable([]);
@@ -14,12 +29,22 @@ export async function loadTickets() {
   ticketsError.set('');
   try {
     const res = await fetch('/api/tickets?limit=50');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     const data = await res.json();
-    tickets.set(data.tickets);
+
+    if (Array.isArray(data.tickets) && data.tickets.length > 0) {
+      tickets.set(data.tickets);
+    } else {
+      // Snowflake returned 0 rows — fall back to demo data so the UI is never empty
+      console.warn('[loadTickets] Snowflake returned 0 tickets, using mock data');
+      tickets.set(MOCK_TICKETS);
+      ticketsError.set('Snowflake returned 0 rows — showing demo data');
+    }
   } catch (e) {
-    ticketsError.set(e.message);
-    console.error('Failed to load tickets:', e);
+    console.error('[loadTickets] Failed:', e);
+    // Fall back to mock data so agents always see something
+    tickets.set(MOCK_TICKETS);
+    ticketsError.set(`Live data unavailable (${e.message}) — showing demo data`);
   } finally {
     ticketsLoading.set(false);
   }
@@ -36,21 +61,33 @@ export const selectedTicket = derived(
 // Filters
 export const filters = writable({ status: 'all', priority: 'all', search: '' });
 
-export const filteredTickets = derived([tickets, filters], ([$tickets, $f]) => {
-  return $tickets.filter(t => {
-    if ($f.status   !== 'all' && t.status   !== $f.status)   return false;
-    if ($f.priority !== 'all' && t.priority !== $f.priority) return false;
-    if ($f.search) {
-      const q = $f.search.toLowerCase();
-      if (!t.subject.toLowerCase().includes(q) &&
-          !t.customer.name.toLowerCase().includes(q) &&
-          !t.id.toLowerCase().includes(q)) return false;
-    }
-    return true;
-  });
-});
-
 // Actions
-export function updateTicketStatus(id, status) {
-  tickets.update(all => all.map(t => t.id === id ? { ...t, status } : t));
+export async function updateTicketStatus(id, status, resolution = null) {
+  console.log('[updateTicketStatus] Called with:', { id, status, resolution });
+
+  // Optimistically update local state immediately
+  tickets.update(all => all.map(t =>
+    t.id === id ? { ...t, status, ...(resolution ? { resolution } : {}) } : t
+  ));
+
+  // Persist to Snowflake
+  try {
+    const payload = { id, status, resolution };
+    console.log('[updateTicketStatus] Sending PATCH:', JSON.stringify(payload));
+
+    const res = await fetch('/api/tickets', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.error('[updateTicketStatus] PATCH failed:', res.status, data);
+    } else {
+      console.log('[updateTicketStatus] PATCH success:', data);
+    }
+  } catch (e) {
+    console.error('[updateTicketStatus] Network error:', e);
+  }
 }

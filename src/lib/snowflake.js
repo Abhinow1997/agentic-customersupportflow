@@ -12,15 +12,23 @@ import {
   SNOWFLAKE_ROLE
 } from '$env/static/private';
 
+// Suppress the verbose INFO logs from the Snowflake SDK
+snowflake.configure({ logLevel: 'WARN' });
+
 function createConnection() {
   return snowflake.createConnection({
-    account:   SNOWFLAKE_ACCOUNT,
-    username:  SNOWFLAKE_USERNAME,
-    password:  SNOWFLAKE_PASSWORD,
-    database:  SNOWFLAKE_DATABASE,
-    schema:    SNOWFLAKE_SCHEMA,
-    warehouse: SNOWFLAKE_WAREHOUSE,
-    role:      SNOWFLAKE_ROLE
+    account:       SNOWFLAKE_ACCOUNT,
+    username:      SNOWFLAKE_USERNAME,
+    password:      SNOWFLAKE_PASSWORD,
+    // authenticator: 'SNOWFLAKE' works for both password AND PAT.
+    // If your account enforces MFA for password auth, generate a Personal
+    // Access Token in Snowsight (My Profile -> Personal Access Tokens)
+    // and set SNOWFLAKE_PASSWORD to that token value in .env.
+    authenticator: 'SNOWFLAKE',
+    database:      SNOWFLAKE_DATABASE,
+    schema:        SNOWFLAKE_SCHEMA,
+    warehouse:     SNOWFLAKE_WAREHOUSE,
+    role:          SNOWFLAKE_ROLE,
   });
 }
 
@@ -42,7 +50,7 @@ export function query(sql, binds = []) {
         sqlText: sql,
         binds,
         complete: (queryErr, _stmt, rows) => {
-          conn.destroy(() => {});   // always release connection
+          conn.destroy(() => {});
           if (queryErr) {
             reject(new Error(`Snowflake query failed: ${queryErr.message}`));
           } else {

@@ -220,10 +220,12 @@
               <div class="section-label">Item Details <span class="sf-tag">✦ Snowflake</span></div>
               <div class="kv-list">
                 <div class="kv-row"><span class="kv-key">Product</span><span class="kv-val">{t.item?.name ?? '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.category ?? '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Brand</span><span class="kv-val">{t.item?.brand || '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.categoryFull || t.item?.category || '—'}</span></div>
                 <div class="kv-row"><span class="kv-key">Class</span><span class="kv-val">{t.item?.class ?? '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `$${t.item.price}` : '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `${t.item.price}` : '—'}</span></div>
                 <div class="kv-row"><span class="kv-key">Return Reason</span><span class="kv-val">{t.returnReason ?? '—'}</span></div>
+                {#if t.item?.url}<div class="kv-row"><span class="kv-key">Product Page</span><span class="kv-val"><a href={t.item.url} target="_blank" rel="noreferrer" class="item-link">View ↗</a></span></div>{/if}
               </div>
             </div>
           </div>
@@ -598,6 +600,8 @@
   .spinner-sm{width:13px;height:13px;border:2px solid rgba(0,0,0,0.2);border-top-color:currentColor;border-radius:50%;animation:spin 0.7s linear infinite;display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
 
+  .item-link{color:var(--amber);font-size:12px;font-family:var(--font-mono);text-decoration:none;border-bottom:1px solid rgba(212,168,67,0.4)}
+  .item-link:hover{border-bottom-color:var(--amber)}
   .ai-loading-block{display:flex;align-items:center;gap:12px;padding:20px 0;color:var(--amber);font-size:13px;font-weight:600;font-family:var(--font-mono)}
   .ai-loading-block .spinner-sm{border-color:rgba(212,168,67,0.3);border-top-color:var(--amber)}
   .ai-error-banner{padding:10px 14px;background:var(--red-dim);border:1px solid rgba(224,92,92,0.3);border-radius:var(--radius-sm);color:var(--red);font-size:12px;margin-bottom:10px}

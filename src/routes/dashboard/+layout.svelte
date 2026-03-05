@@ -1,5 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { session } from '$lib/stores.js';
   import { onMount } from 'svelte';
 
@@ -11,6 +12,13 @@
     session.set(null);
     goto('/');
   }
+
+  // Derive active nav item from current path
+  $: path = $page.url.pathname;
+  $: isReturns   = path === '/dashboard' || path === '/dashboard/';
+  $: isEnquiries = path.startsWith('/dashboard/enquiries');
+  $: isAnalytics = false;
+  $: isPolicy    = false;
 </script>
 
 {#if $session}
@@ -25,20 +33,35 @@
     </div>
 
     <nav class="nav">
-      <a href="/dashboard" class="nav-item active">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path d="M3 10h18M3 14h18M10 3l-7 7 7 7M14 3l7 7-7 7"/>
+      <!-- Queues section -->
+      <div class="nav-section-label">Queues</div>
+
+      <a href="/dashboard" class="nav-item" class:active={isReturns}>
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path d="M16 17l-4 4-4-4m0-10l4-4 4 4M3 12h18"/>
         </svg>
         Returned Items
       </a>
+
+      <a href="/dashboard/enquiries" class="nav-item" class:active={isEnquiries}>
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+        </svg>
+        Enquiry Tickets
+      </a>
+
+      <!-- Tools section -->
+      <div class="nav-section-label" style="margin-top:12px">Tools</div>
+
       <a href="/dashboard" class="nav-item disabled">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
         </svg>
         Analytics
       </a>
+
       <a href="/dashboard" class="nav-item disabled">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
         </svg>
         Policy Library
@@ -97,7 +120,7 @@
     letter-spacing: -0.5px;
   }
 
-  .arc { color: var(--text-primary); }
+  .arc  { color: var(--text-primary); }
   .ella { color: var(--amber); }
 
   .logo-sub {
@@ -115,6 +138,16 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .nav-section-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-family: var(--font-mono);
+    padding: 6px 12px 4px;
   }
 
   .nav-item {
@@ -142,7 +175,7 @@
 
   .nav-item.disabled {
     pointer-events: none;
-    opacity: 0.4;
+    opacity: 0.35;
   }
 
   .sidebar-bottom {
@@ -173,6 +206,7 @@
   }
 
   .agent-info { flex: 1; min-width: 0; }
+
   .agent-name {
     font-size: 12.5px;
     font-weight: 600;
@@ -181,6 +215,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+
   .agent-role {
     font-size: 10.5px;
     color: var(--text-muted);

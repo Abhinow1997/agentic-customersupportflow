@@ -1,0 +1,18 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.9.2
+pydantic-settings==2.6.1
+snowflake-connector-python==3.12.3
+python-dotenv==1.0.1
+
+# ── LangGraph ──────────────────────────────────────────────────────────────
+# langchain-anthropic and anthropic removed — all LLM calls go through LiteLLM
+langchain==0.3.25
+langchain-core==0.3.58
+langgraph==0.4.1
+
+# ── LiteLLM — unified LLM gateway (OpenAI + any other provider) ───────────
+# Pinned to 1.52.1 — versions above have a Windows cp1252 regression where
+# litellm/utils.py opens its model pricing JSON without utf-8 encoding.
+litellm==1.52.1
+openai==1.57.4

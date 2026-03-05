@@ -3,7 +3,7 @@
   import {
     filters, selectedTicketId, selectedTicket,
     tickets, ticketsLoading, ticketsError,
-    loadTickets, updateTicketStatus
+    loadTickets, updateTicketStatus, analyzeTicket
   } from '$lib/stores.js';
 
   // ── Filter tab ──────────────────────────────────────────────────────────
@@ -62,13 +62,17 @@
   function resolutionColor(id) { return RESOLUTION_OPTIONS.find(o => o.id === id)?.color ?? 'amber'; }
   function resolutionIcon(id)  { return RESOLUTION_OPTIONS.find(o => o.id === id)?.icon  ?? '—'; }
 
-  // ── UI state machine ────────────────────────────────────────────────────
-  // stages: 'idle' | 'manual_selecting' | 'manual_selected' | 'ai_shown' | 'confirmed'
+  // ── UI state machine ──────────────────────────────────────────────────────
+  // stages: 'idle' | 'manual_selecting' | 'manual_selected' | 'ai_loading' | 'ai_shown' | 'confirmed'
   let uiStage            = 'idle';
   let selectedResolution = null;
   let confirmLoading     = false;
 
-  // Restore from persisted Snowflake data on ticket change
+  // Live triage result from FastAPI — replaces t.triage in ai_shown stage
+  let aiTriage = null;
+  let aiError  = null;
+
+  // Reset all local state when the selected ticket changes
   $: if ($selectedTicket) {
     const t = $selectedTicket;
     if (t.status === 'Closed') {
@@ -80,13 +84,29 @@
       uiStage = 'idle';
       selectedResolution = null;
     }
+    aiTriage       = null;
+    aiError        = null;
     confirmLoading = false;
   }
 
   function handleManualClick()         { uiStage = 'manual_selecting'; }
   function handleSelectResolution(opt) { selectedResolution = opt; uiStage = 'manual_selected'; }
   function handleBack()                { uiStage = 'manual_selecting'; selectedResolution = null; }
-  function handleAiAnalyze()           { uiStage = 'ai_shown'; }
+
+  async function handleAiAnalyze() {
+    if (!$selectedTicket) return;
+    uiStage  = 'ai_loading';
+    aiTriage = null;
+    aiError  = null;
+    try {
+      const result = await analyzeTicket($selectedTicket);
+      aiTriage = result.triage;   // { action, actionLabel, actionRationale, refundSignal, policyRef, flags, priorityOverride }
+      uiStage  = 'ai_shown';
+    } catch (e) {
+      aiError = e.message;
+      uiStage = 'idle';
+    }
+  }
 
   async function handleConfirm() {
     if (!$selectedTicket) return;
@@ -236,6 +256,9 @@
 
           <!-- ── idle: two entry buttons ── -->
           {#if uiStage === 'idle'}
+            {#if aiError}
+              <div class="ai-error-banner">⚠ AI analysis failed: {aiError}</div>
+            {/if}
             <div class="action-bar">
               <button class="btn-action btn-manual" on:click={handleManualClick}>✎ Manually Resolve</button>
               <button class="btn-action btn-ai" on:click={handleAiAnalyze}>✦ AI Analyze</button>
@@ -256,6 +279,13 @@
               </div>
             </div>
 
+          <!-- ── ai_loading: spinner while FastAPI responds ── -->
+          {:else if uiStage === 'ai_loading'}
+            <div class="ai-loading-block">
+              <span class="spinner-sm"></span>
+              <span>Running AI triage…</span>
+            </div>
+
           <!-- ── manual_selected: show choice + triage + confirm ── -->
           {:else if uiStage === 'manual_selected'}
             <div class="detail-section resolution-section">
@@ -271,7 +301,7 @@
                 </div>
               </div>
             </div>
-            {#if t.triage}{@const tr = t.triage}
+            {#if aiTriage ?? t.triage}{@const tr = aiTriage ?? t.triage}
               <div class="detail-section triage-section">
                 <div class="section-label">AI Resolution Recommendation</div>
                 <div class="triage-action action-{tr.action}">
@@ -310,11 +340,11 @@
               </button>
             </div>
 
-          <!-- ── ai_shown: show triage + confirm ── -->
+          <!-- ── ai_shown: live FastAPI triage + confirm ── -->
           {:else if uiStage === 'ai_shown'}
-            {#if t.triage}{@const tr = t.triage}
+            {#if aiTriage}{@const tr = aiTriage}
               <div class="detail-section triage-section">
-                <div class="section-label">AI Resolution Recommendation</div>
+                <div class="section-label">AI Resolution Recommendation <span class="ai-tag">✦ LLM</span></div>
                 <div class="triage-action action-{tr.action}">
                   <div class="triage-action-header">
                     <span class="triage-action-label">{tr.actionLabel}</span>
@@ -567,4 +597,9 @@
 
   .spinner-sm{width:13px;height:13px;border:2px solid rgba(0,0,0,0.2);border-top-color:currentColor;border-radius:50%;animation:spin 0.7s linear infinite;display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
+
+  .ai-loading-block{display:flex;align-items:center;gap:12px;padding:20px 0;color:var(--amber);font-size:13px;font-weight:600;font-family:var(--font-mono)}
+  .ai-loading-block .spinner-sm{border-color:rgba(212,168,67,0.3);border-top-color:var(--amber)}
+  .ai-error-banner{padding:10px 14px;background:var(--red-dim);border:1px solid rgba(224,92,92,0.3);border-radius:var(--radius-sm);color:var(--red);font-size:12px;margin-bottom:10px}
+  .ai-tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;color:var(--amber);background:var(--amber-glow);border:1px solid rgba(212,168,67,0.3)}
 </style>

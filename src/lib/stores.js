@@ -61,6 +61,45 @@ export const selectedTicket = derived(
 // Filters
 export const filters = writable({ status: 'all', priority: 'all', search: '' });
 
+// ── AI Analyze ────────────────────────────────────────────────────────────
+const FASTAPI_URL = 'http://localhost:8000';
+
+export async function analyzeTicket(ticket) {
+  const payload = {
+    ticket_id:    ticket.id,
+    returnReason: ticket.returnReason ?? '',
+    returnAmt:    ticket.returnAmt    ?? '0',
+    netLoss:      ticket.netLoss      ?? '0',
+    customer: {
+      name:   ticket.customer?.name   ?? '',
+      email:  ticket.customer?.email  ?? '',
+      tier:   ticket.customer?.tier   ?? 'Bronze',
+      ltv:    ticket.customer?.ltv    ?? '0',
+      orders: ticket.customer?.orders ?? 0,
+    },
+    item: {
+      name:      ticket.item?.name      ?? '',
+      category:  ticket.item?.category  ?? '',
+      class:     ticket.item?.class     ?? '',
+      price:     ticket.item?.price     ?? '0',
+      returnQty: ticket.item?.returnQty ?? 1,
+    },
+  };
+
+  const res = await fetch(`${FASTAPI_URL}/api/analyze/ticket`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? `HTTP ${res.status}`);
+  }
+
+  return await res.json(); // { ticket_id, triage: { action, actionLabel, ... } }
+}
+
 // Actions
 export async function updateTicketStatus(id, status, resolution = null) {
   console.log('[updateTicketStatus] Called with:', { id, status, resolution });

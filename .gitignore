@@ -33,3 +33,7 @@ coverage/
 
 # TypeScript cache
 *.tsbuildinfo
+*venv*
+.venv/
+__pycache__/
+*.pyc

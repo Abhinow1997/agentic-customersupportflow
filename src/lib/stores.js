@@ -19,7 +19,10 @@ function makePersistedSession() {
 }
 export const session = makePersistedSession();
 
-// Tickets — loaded from /api/tickets
+// FastAPI base URL — all data + AI calls go through FastAPI
+const FASTAPI_URL = 'http://localhost:8000';
+
+// Tickets — loaded from FastAPI
 export const tickets        = writable([]);
 export const ticketsLoading = writable(false);
 export const ticketsError   = writable('');
@@ -28,7 +31,7 @@ export async function loadTickets() {
   ticketsLoading.set(true);
   ticketsError.set('');
   try {
-    const res = await fetch('/api/tickets?limit=50');
+    const res = await fetch(`${FASTAPI_URL}/api/tickets?limit=50`);
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     const data = await res.json();
 
@@ -60,9 +63,6 @@ export const selectedTicket = derived(
 
 // Filters
 export const filters = writable({ status: 'all', priority: 'all', search: '' });
-
-// ── AI Analyze ────────────────────────────────────────────────────────────
-const FASTAPI_URL = 'http://localhost:8000';
 
 export async function analyzeTicket(ticket) {
   const payload = {
@@ -114,7 +114,7 @@ export async function updateTicketStatus(id, status, resolution = null) {
     const payload = { id, status, resolution };
     console.log('[updateTicketStatus] Sending PATCH:', JSON.stringify(payload));
 
-    const res = await fetch('/api/tickets', {
+    const res = await fetch(`${FASTAPI_URL}/api/tickets`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

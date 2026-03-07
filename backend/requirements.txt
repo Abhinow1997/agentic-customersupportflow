@@ -16,3 +16,15 @@ langgraph==0.4.1
 # litellm/utils.py opens its model pricing JSON without utf-8 encoding.
 litellm==1.52.1
 openai==1.57.4
+
+# ── RAG Pipeline (ChromaDB + Scrapling) ────────────────────────────────────
+# Install in stages:
+#   Stage 1 (core):  pip install chromadb tiktoken PyPDF2
+#   Stage 2 (scraper): pip install scrapling
+#   Stage 3 (browser): scrapling install   (downloads Playwright/Camoufox binaries)
+#   Stage 4 (full):  pip install "scrapling[all]"  (only if you need StealthyFetcher)
+
+chromadb
+tiktoken
+PyPDF2
+scrapling

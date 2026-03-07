@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import health, analyze
+from app.routers import health, analyze, rag, tickets, customers, reasons, items, suggest_reason
 
 settings = get_settings()
 
@@ -50,6 +50,12 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(analyze.router)
+app.include_router(rag.router)
+app.include_router(tickets.router)
+app.include_router(customers.router)
+app.include_router(reasons.router)
+app.include_router(items.router)
+app.include_router(suggest_reason.router)
 
 # ── Root ─────────────────────────────────────────────────────────────────────
 

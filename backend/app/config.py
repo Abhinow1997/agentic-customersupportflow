@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
 
+    # ── ChromaDB (RAG) ─────────────────────────────────────────────────────
+    CHROMA_PERSIST_DIR: str = "./chroma_walmart_policies"
+    CHROMA_COLLECTION: str = "walmart_policies"
+
     # ── CORS ───────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",   # SvelteKit dev

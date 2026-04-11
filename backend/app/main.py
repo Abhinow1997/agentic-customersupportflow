@@ -18,7 +18,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import health, analyze, rag, tickets, customers, reasons, items, suggest_reason
+from app.routers import (
+    health,
+    analyze,
+    rag,
+    tickets,
+    customers,
+    reasons,
+    items,
+    suggest_reason,
+    transcribe,
+    instagram_posts,
+)
 
 settings = get_settings()
 
@@ -56,6 +67,8 @@ app.include_router(customers.router)
 app.include_router(reasons.router)
 app.include_router(items.router)
 app.include_router(suggest_reason.router)
+app.include_router(transcribe.router)
+app.include_router(instagram_posts.router)
 
 # ── Root ─────────────────────────────────────────────────────────────────────
 

@@ -52,8 +52,209 @@
   let aiSuggestedText     = '';       // AI-proposed text, shown in banner
 
   // ── Enquiry fields ────────────────────────────────────────────────────────
-  let enquirySubject   = '';
-  let enquiryCategory  = '';
+  let enquirySubject      = '';
+  let enquiryCategory     = '';
+  let enquiryInputMode    = 'email';   // 'email' | 'voicemail'
+  let enquiryRawMessage   = '';        // full pasted email / text body
+  let enquirySenderName   = '';
+  let enquirySenderEmail  = '';
+  let enquirySenderType   = 'customer'; // 'customer' | 'seller' | 'other'
+
+  // ── Voicemail recording state ────────────────────────────────────────────
+  let vmRecording        = false;   // currently recording
+  let vmMediaRecorder    = null;    // MediaRecorder instance
+  let vmAudioChunks      = [];      // collected Blob chunks
+  let vmAudioBlob        = null;    // final recorded Blob
+  let vmAudioUrl         = '';      // object URL for playback preview
+  let vmDuration         = 0;       // elapsed seconds while recording
+  let vmDurationTimer    = null;    // setInterval handle
+  let vmTranscribing     = false;   // waiting for Whisper response
+  let vmTranscriptError  = '';
+  let vmS3Url            = '';      // S3 URL returned after upload
+  let vmS3Key            = '';
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      vmAudioChunks = [];
+      vmAudioBlob   = null;
+      vmAudioUrl    = '';
+      vmDuration    = 0;
+      vmTranscriptError = '';
+      vmS3Url = ''; vmS3Key = '';
+
+      vmMediaRecorder = new MediaRecorder(stream);
+      vmMediaRecorder.ondataavailable = e => { if (e.data.size > 0) vmAudioChunks.push(e.data); };
+      vmMediaRecorder.onstop = () => {
+        vmAudioBlob = new Blob(vmAudioChunks, { type: 'audio/webm' });
+        vmAudioUrl  = URL.createObjectURL(vmAudioBlob);
+        // Stop all tracks so mic indicator goes away
+        stream.getTracks().forEach(t => t.stop());
+      };
+      vmMediaRecorder.start();
+      vmRecording = true;
+      vmDurationTimer = setInterval(() => vmDuration++, 1000);
+    } catch (err) {
+      vmTranscriptError = 'Microphone access denied. Please allow mic access and try again.';
+    }
+  }
+
+  function stopRecording() {
+    if (vmMediaRecorder && vmRecording) {
+      vmMediaRecorder.stop();
+      vmRecording = false;
+      clearInterval(vmDurationTimer);
+    }
+  }
+
+  function discardRecording() {
+    stopRecording();
+    vmAudioBlob = null;
+    vmAudioUrl  = '';
+    vmDuration  = 0;
+    vmAudioChunks = [];
+    vmTranscriptError = '';
+    vmS3Url = ''; vmS3Key = '';
+  }
+
+  async function transcribeRecording() {
+    if (!vmAudioBlob) return;
+    vmTranscribing = true;
+    vmTranscriptError = '';
+    try {
+      const fd = new FormData();
+      fd.append('audio', vmAudioBlob, 'voicemail.webm');
+      fd.append('ticket_ref', 'enquiry-' + Date.now());
+      const res  = await fetch(`${FASTAPI}/api/enquiry/transcribe`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
+      enquiryRawMessage = data.transcript ?? '';
+      vmS3Url = data.s3_url ?? '';
+      vmS3Key = data.s3_key ?? '';
+      if (data.s3_error) console.warn('S3 warning:', data.s3_error);
+    } catch (e) {
+      vmTranscriptError = e.message;
+    } finally {
+      vmTranscribing = false;
+    }
+  }
+
+  $: vmFormatDuration = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+
+  const DEMO_SAMPLES = [
+    {
+      label: 'Order Not Received',
+      senderType: 'customer',
+      senderName: 'Sarah Thompson',
+      senderEmail: 'sarah.t@gmail.com',
+      subject: 'My order hasn\'t arrived — tracking stuck for 3 days',
+      body: `Hi,
+
+I placed order #WM-8821 six days ago and I still haven't received it. The tracking page hasn't updated in 3 days and just says "In Transit".
+
+Could someone please look into this urgently? I needed this item by the weekend.
+
+Thank you,
+Sarah Thompson`,
+    },
+    {
+      label: 'Billing Double Charge',
+      senderType: 'customer',
+      senderName: 'Jennifer Walsh',
+      senderEmail: 'j.walsh@hotmail.com',
+      subject: 'Duplicate charge on my account — need immediate refund',
+      body: `Hello,
+
+I was charged $149.99 twice for my subscription renewal on March 10th. I only authorised one payment. My bank statement clearly shows two identical transactions.
+
+Please refund the duplicate charge as soon as possible.
+
+Regards,
+Jennifer Walsh
+Account: jennifer.w@hotmail.com`,
+    },
+    {
+      label: 'Wrong Item Delivered',
+      senderType: 'customer',
+      senderName: 'Marcus Reid',
+      senderEmail: 'marcusreid22@gmail.com',
+      subject: 'Received wrong product — Order #WM-9034',
+      body: `Hi there,
+
+I ordered a Blue 12-Cup Coffee Maker (Model CM-200) but received a Red 8-Cup version instead. This was meant as a birthday gift and I'm very disappointed.
+
+Order #WM-9034 — placed on March 8th.
+
+I'd like either the correct item sent to me or a full refund. Please advise on next steps.
+
+Thanks,
+Marcus`,
+    },
+    {
+      label: 'Seller — Product Delisted',
+      senderType: 'seller',
+      senderName: 'TechGadget Supplies',
+      senderEmail: 'ops@techgadgetsupplies.com',
+      subject: 'Product listings removed without notice — urgent reinstatement needed',
+      body: `Dear Support Team,
+
+This is the operations team at TechGadget Supplies. Three of our active product listings have been removed without any notification or explanation.
+
+Affected Product IDs: TG-441, TG-445, TG-502
+
+These listings were compliant with all marketplace guidelines. We are losing significant daily revenue and need this escalated urgently.
+
+Please advise on why they were removed and provide a timeline for reinstatement.
+
+Best regards,
+David Chen
+Operations Manager — TechGadget Supplies`,
+    },
+    {
+      label: 'Seller — Payout Delay',
+      senderType: 'seller',
+      senderName: 'Sunrise Electronics',
+      senderEmail: 'accounts@sunriseelectronics.co',
+      subject: 'February seller payout still not received — $3,420 outstanding',
+      body: `Dear Accounts Team,
+
+My seller payout for February has not been processed. The expected settlement date was February 28th and it is now March 13th — two weeks overdue.
+
+Outstanding amount: $3,420.00
+Seller Account ID: SE-00482
+
+I have raised this through the portal twice with no response. Please treat this as urgent.
+
+Regards,
+David Chen
+Sunrise Electronics`,
+    },
+    {
+      label: 'Promo Code Not Applied',
+      senderType: 'customer',
+      senderName: 'Priya Nair',
+      senderEmail: 'priya.nair@outlook.com',
+      subject: 'Promo code SAVE20 not applied to my order',
+      body: `Hi,
+
+I used promo code SAVE20 at checkout on March 11th but my final order total wasn't reduced. I was charged the full price of $89.99 instead of the expected $71.99.
+
+Order confirmation number: #WM-9187
+
+Can you please apply the discount retroactively or issue a partial refund of $18.00?
+
+Thank you,
+Priya`,
+    },
+  ];
+
+  function applySample(s) {
+    enquirySenderName  = s.senderName;
+    enquirySenderEmail = s.senderEmail;
+    enquirySenderType  = s.senderType;
+    enquirySubject     = s.subject;
+    enquiryRawMessage  = s.body;
+  }
 
   const ENQUIRY_CATEGORIES = [
     { id: 'order_status',   label: 'Order Status',       icon: '📦' },
@@ -87,11 +288,13 @@
   ];
 
   // ── Step labels ───────────────────────────────────────────────────────────
-  $: stepLabels = [
-    { n: 1, label: 'Customer & Details' },
-    { n: 2, label: ticketType === 'return' ? 'Item & Assessment' : 'Enquiry Details' },
-    { n: 3, label: ticketType === 'return' ? 'Financials & Submit' : 'Review & Submit' },
-  ];
+  $: stepLabels = ticketType === 'enquiry'
+    ? [{ n: 1, label: 'Enquiry Details' }]
+    : [
+        { n: 1, label: 'Customer & Details' },
+        { n: 2, label: 'Item & Assessment' },
+        { n: 3, label: 'Financials & Submit' },
+      ];
 
   // ── Derived ───────────────────────────────────────────────────────────────
   $: reasonText = returnReasonText;  // alias used in review + payload
@@ -113,10 +316,10 @@
     ? (parseFloat(itemDetails.price) * returnQty * 0.4 * (1 + packagingFactor)).toFixed(2)
     : null;
 
-  $: step1Valid = lookupStatus !== '' && custName.trim() && complaintDesc.trim();
-  $: step2Valid = ticketType === 'return'
-    ? (itemLookupStatus === 'found' && returnReasonText.trim() && packagingCondition)
-    : (enquirySubject.trim() && enquiryCategory);
+  $: step1Valid = ticketType === 'enquiry'
+    ? (enquiryRawMessage.trim())
+    : (lookupStatus !== '' && custName.trim() && complaintDesc.trim());
+  $: step2Valid = itemLookupStatus === 'found' && returnReasonText.trim() && packagingCondition;
   // returnAmt is auto-populated so step 3 is always valid for returns once item exists
   $: step3Valid = ticketType === 'return'
     ? (!!itemDetails && returnAmt !== '')
@@ -178,10 +381,25 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          complaint_desc:      complaintDesc,
-          packaging_condition: packagingCondition,
-          item_name:           itemDetails?.name ?? '',
-          item_category:       itemDetails?.category ?? '',
+          // complaint
+          complaint_desc:       complaintDesc,
+          // packaging
+          packaging_condition:  packagingCondition,
+          packaging_factor:     packagingFactor,
+          // full item details
+          item_name:            itemDetails?.name          ?? '',
+          item_brand:           itemDetails?.brand         ?? '',
+          item_category:        itemDetails?.category      ?? '',
+          item_category_full:   itemDetails?.category_full ?? '',
+          item_class:           itemDetails?.cls           ?? '',
+          item_price:           itemDetails?.price         ?? '',
+          item_list_price:      itemDetails?.list_price    ?? '',
+          item_desc:            itemDetails?.desc          ?? '',
+          item_package_size:    itemDetails?.package_size  ?? '',
+          // return financials
+          return_qty:           returnQty,
+          return_amt:           returnAmt,
+          net_loss:             netLoss,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -219,7 +437,8 @@
     ticketType = t; step = 1;
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null;
     packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
-    enquirySubject = ''; enquiryCategory = '';
+    enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
+    enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = '';
   }
 
@@ -236,7 +455,7 @@
       ...(ticketType === 'return' ? {
         item: {
           sk:        itemDetails?.sk,
-          rn:        itemDetails?.rn,   // rank — stored as SR_ITEM_SK
+          rn:        itemDetails?.rn,
           name:      itemDetails?.name,
           category:  itemDetails?.category,
           class:     itemDetails?.cls,
@@ -244,13 +463,15 @@
           price:     itemDetails?.price,
           returnQty,
         },
-        // reasonDesc = assessment reason text — stored in SR_RESOLUTION
         reasonDesc: returnReasonText.trim() || complaintDesc.trim(),
         returnAmt:  parseFloat(returnAmt) || 0,
         netLoss:    parseFloat(netLoss)   || 0,
       } : {
-        enquirySubject: enquirySubject.trim(),
         enquiryCategory,
+        enquiryInputMode,
+        enquiryRawMessage:  enquiryRawMessage.trim(),
+        enquirySenderName:  enquirySenderName.trim(),
+        enquirySenderType,
         returnAmt: 0, netLoss: 0,
       }),
     };
@@ -274,7 +495,8 @@
     custTier = 'Bronze'; custSk = null; channel = 'email'; complaintDesc = '';
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null; returnQty = 1;
     packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
-    enquirySubject = ''; enquiryCategory = '';
+    enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
+    enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
     priority = 'medium'; ticketType = 'return';
   }
@@ -341,86 +563,211 @@
 
       <div class="form-container">
 
-        <!-- ═══ STEP 1: Customer ═══ -->
+        <!-- ═══ STEP 1 ═══ -->
         {#if step === 1}
 
-          <div class="form-section">
-            <div class="section-title">Customer Lookup</div>
-            <div class="lookup-row">
-              <div class="lookup-input-wrap">
-                <input type="email" bind:value={lookupEmail}
-                  on:keydown={e => e.key === 'Enter' && lookupCustomer()}
-                  placeholder="Enter customer email to search…"
-                  class:input-found={lookupStatus === 'found'}
-                  class:input-warn={lookupStatus === 'not_found'}
-                  disabled={lookupLoading} />
+          {#if ticketType === 'enquiry'}
+            <!-- ═══ ENQUIRY: single-step form + direct submit ═══ -->
+
+            <!-- Input mode selector -->
+            <div class="form-section">
+              <div class="section-title">Input Mode</div>
+              <div class="input-mode-tabs">
+                <button class="mode-tab" class:active={enquiryInputMode === 'email'} on:click={() => enquiryInputMode = 'email'}>
+                  <span class="mode-tab-icon">✉</span>
+                  <div class="mode-tab-body">
+                    <span class="mode-tab-label">Email / Text Message</span>
+                    <span class="mode-tab-desc">Paste or type the customer’s email, live chat or any written message</span>
+                  </div>
+                </button>
+                <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
+                  <span class="mode-tab-icon">🎙</span>
+                  <div class="mode-tab-body">
+                    <span class="mode-tab-label">Voicemail</span>
+                    <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                  </div>
+                </button>
               </div>
-              <button class="btn btn-lookup" on:click={lookupCustomer} disabled={!lookupEmail.trim() || lookupLoading}>
-                {#if lookupLoading}<span class="spinner-sm"></span> Looking up…{:else}🔍 Look Up{/if}
-              </button>
-              {#if lookupStatus}<button class="btn btn-ghost btn-sm" on:click={clearCustomer}>✕</button>{/if}
             </div>
 
-            {#if lookupStatus === 'found'}
-              <div class="lookup-banner lookup-found">
-                <span class="banner-icon">✓</span>
-                <div class="banner-body"><strong>Customer found</strong><span class="banner-sub">{custName} · {custEmail}</span></div>
-                <span class="tier-badge tier-{custTier.toLowerCase()}">{custTier}</span>
-              </div>
-            {:else if lookupStatus === 'not_found'}
-              <div class="lookup-banner lookup-new">
-                <span class="banner-icon">＋</span>
-                <div class="banner-body"><strong>No existing customer found</strong><span class="banner-sub">Enter the customer's name below to continue</span></div>
-              </div>
-            {:else if lookupStatus === 'error'}
-              <div class="lookup-banner lookup-error">
-                <span class="banner-icon">⚠</span>
-                <div class="banner-body"><strong>Lookup failed</strong><span class="banner-sub">Enter details manually below</span></div>
-              </div>
-            {/if}
-
-            {#if lookupStatus !== ''}
-              <div class="field mt-12">
-                <label>Customer Name <span class="req">*</span>
-                  {#if lookupStatus === 'found'}<span class="field-note">auto-filled from records</span>{/if}
-                </label>
-                <input type="text" bind:value={custName} placeholder="Full name"
-                  readonly={lookupStatus === 'found'} class:readonly-field={lookupStatus === 'found'} />
-              </div>
-            {/if}
-          </div>
-
-          {#if lookupStatus !== ''}
+            <!-- Demo samples -->
             <div class="form-section">
-              <div class="section-title">Contact Channel</div>
-              <div class="chip-group">
-                {#each CHANNELS as ch}
-                  <button class="chip" class:selected={channel === ch.id} on:click={() => channel = ch.id}>
-                    <span class="chip-icon">{ch.icon}</span>{ch.label}
+              <div class="section-title">Load a Demo Sample <span class="section-sub">— click any to populate the form</span></div>
+              <div class="sample-grid">
+                {#each DEMO_SAMPLES as s}
+                  <button class="sample-card" class:seller={s.senderType === 'seller'} on:click={() => applySample(s)}>
+                    <div class="sample-card-top">
+                      <span class="sample-type-badge sample-type-{s.senderType}">{s.senderType}</span>
+                      <span class="sample-label">{s.label}</span>
+                    </div>
+                    <span class="sample-from">{s.senderName}</span>
                   </button>
                 {/each}
               </div>
             </div>
 
-            <div class="form-section">
-              <div class="section-title">
-                {ticketType === 'return' ? 'Complaint Description' : 'Customer Message / Notes'}
-                <span class="req">*</span>
+            {#if enquiryInputMode === 'voicemail'}
+              <!-- ─── VOICEMAIL RECORDER ─── -->
+              <div class="form-section vm-section">
+                <div class="section-title">Voicemail Recorder</div>
+
+                <!-- Idle: show record button -->
+                {#if !vmRecording && !vmAudioBlob}
+                  <div class="vm-idle">
+                    <button class="vm-record-btn" on:click={startRecording}>
+                      <span class="vm-mic-icon">🎙</span>
+                      <span>Start Recording</span>
+                    </button>
+                    <p class="vm-hint">Click to start recording. The audio will be saved to S3 and transcribed via OpenAI Whisper.</p>
+                  </div>
+                {/if}
+
+                <!-- Recording in progress -->
+                {#if vmRecording}
+                  <div class="vm-recording">
+                    <div class="vm-pulse-ring">
+                      <div class="vm-pulse-dot"></div>
+                    </div>
+                    <div class="vm-recording-info">
+                      <span class="vm-rec-label">REC</span>
+                      <span class="vm-timer">{vmFormatDuration(vmDuration)}</span>
+                    </div>
+                    <button class="vm-stop-btn" on:click={stopRecording}>⏹ Stop Recording</button>
+                  </div>
+                {/if}
+
+                <!-- Recording done — preview + actions -->
+                {#if vmAudioBlob && !vmRecording}
+                  <div class="vm-preview">
+                    <div class="vm-preview-header">
+                      <span class="vm-preview-label">✔ Recording captured</span>
+                      <span class="vm-preview-duration">{vmFormatDuration(vmDuration)}</span>
+                    </div>
+                    <!-- svelte-ignore a11y-media-has-caption -->
+                    <audio src={vmAudioUrl} controls class="vm-audio-player"></audio>
+                    <div class="vm-actions">
+                      {#if enquiryRawMessage}
+                        <div class="vm-transcribed-badge">✦ Transcribed</div>
+                      {:else}
+                        <button class="btn vm-transcribe-btn" disabled={vmTranscribing} on:click={transcribeRecording}>
+                          {#if vmTranscribing}
+                            <span class="spinner-sm"></span> Transcribing…
+                          {:else}
+                            ✦ Transcribe with Whisper
+                          {/if}
+                        </button>
+                      {/if}
+                      <button class="btn btn-ghost btn-sm" on:click={discardRecording}>Discard</button>
+                    </div>
+                    {#if vmS3Key}
+                      <div class="vm-s3-badge">
+                        <span class="vm-s3-icon">☁</span>
+                        <span>Saved to S3 — <code>{vmS3Key}</code></span>
+                      </div>
+                    {/if}
+                    {#if vmTranscriptError}
+                      <div class="vm-error">⚠ {vmTranscriptError}</div>
+                    {/if}
+                  </div>
+                {/if}
               </div>
-              <textarea bind:value={complaintDesc} rows="5"
-                placeholder={ticketType === 'return'
-                  ? "Describe the customer's complaint in detail. E.g.: 'Customer received a damaged laptop — screen cracked on arrival. Wants replacement or full refund…'"
-                  : "Summarise the customer's enquiry. E.g.: 'Customer asking about estimated delivery date for order #X placed 3 days ago…'"}
-              ></textarea>
+
+              <!-- Transcript result (editable) -->
+              {#if enquiryRawMessage}
+                <div class="form-section">
+                  <div class="section-title-row">
+                    <div class="section-title">Transcript <span class="field-note">auto-generated — review and edit</span></div>
+                    <span class="char-count-badge">{enquiryRawMessage.length} chars</span>
+                  </div>
+                  <textarea bind:value={enquiryRawMessage} rows="8" class="message-body-area"
+                    placeholder="Transcript will appear here after Whisper processes the recording..."></textarea>
+                </div>
+              {/if}
+            {/if}
+
+
+
+            {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
+
+            <div class="step-actions">
+              <div></div>
+              <button class="btn btn-submit enquiry-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
+                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Enquiry Ticket{/if}
+              </button>
+            </div>
+
+          {:else}
+            <!-- ═══ RETURN: customer lookup step ═══ -->
+            <div class="form-section">
+              <div class="section-title">Customer Lookup</div>
+              <div class="lookup-row">
+                <div class="lookup-input-wrap">
+                  <input type="email" bind:value={lookupEmail}
+                    on:keydown={e => e.key === 'Enter' && lookupCustomer()}
+                    placeholder="Enter customer email to search…"
+                    class:input-found={lookupStatus === 'found'}
+                    class:input-warn={lookupStatus === 'not_found'}
+                    disabled={lookupLoading} />
+                </div>
+                <button class="btn btn-lookup" on:click={lookupCustomer} disabled={!lookupEmail.trim() || lookupLoading}>
+                  {#if lookupLoading}<span class="spinner-sm"></span> Looking up…{:else}🔍 Look Up{/if}
+                </button>
+                {#if lookupStatus}<button class="btn btn-ghost btn-sm" on:click={clearCustomer}>✕</button>{/if}
+              </div>
+
+              {#if lookupStatus === 'found'}
+                <div class="lookup-banner lookup-found">
+                  <span class="banner-icon">✓</span>
+                  <div class="banner-body"><strong>Customer found</strong><span class="banner-sub">{custName} · {custEmail}</span></div>
+                  <span class="tier-badge tier-{custTier.toLowerCase()}">{custTier}</span>
+                </div>
+              {:else if lookupStatus === 'not_found'}
+                <div class="lookup-banner lookup-new">
+                  <span class="banner-icon">＋</span>
+                  <div class="banner-body"><strong>No existing customer found</strong><span class="banner-sub">Enter the customer’s name below to continue</span></div>
+                </div>
+              {:else if lookupStatus === 'error'}
+                <div class="lookup-banner lookup-error">
+                  <span class="banner-icon">⚠</span>
+                  <div class="banner-body"><strong>Lookup failed</strong><span class="banner-sub">Enter details manually below</span></div>
+                </div>
+              {/if}
+
+              {#if lookupStatus !== ''}
+                <div class="field mt-12">
+                  <label>Customer Name <span class="req">*</span>
+                    {#if lookupStatus === 'found'}<span class="field-note">auto-filled from records</span>{/if}
+                  </label>
+                  <input type="text" bind:value={custName} placeholder="Full name"
+                    readonly={lookupStatus === 'found'} class:readonly-field={lookupStatus === 'found'} />
+                </div>
+              {/if}
+            </div>
+
+            {#if lookupStatus !== ''}
+              <div class="form-section">
+                <div class="section-title">Contact Channel</div>
+                <div class="chip-group">
+                  {#each CHANNELS as ch}
+                    <button class="chip" class:selected={channel === ch.id} on:click={() => channel = ch.id}>
+                      <span class="chip-icon">{ch.icon}</span>{ch.label}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <div class="form-section">
+                <div class="section-title">Complaint Description <span class="req">*</span></div>
+                <textarea bind:value={complaintDesc} rows="5"
+                  placeholder="Describe the customer’s complaint in detail. E.g.: ‘Customer received a damaged laptop — screen cracked on arrival. Wants replacement or full refund…’"
+                ></textarea>
+              </div>
+            {/if}
+
+            <div class="step-actions">
+              <div></div>
+              <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>Next: Item & Assessment →</button>
             </div>
           {/if}
-
-          <div class="step-actions">
-            <div></div>
-            <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>
-              {ticketType === 'return' ? 'Next: Item & Assessment →' : 'Next: Enquiry Details →'}
-            </button>
-          </div>
 
 
         <!-- ═══ STEP 2A: Item & Assessment (Return) ═══ -->
@@ -609,28 +956,26 @@
         <!-- ═══ STEP 2B: Enquiry Details ═══ -->
         {:else if step === 2 && ticketType === 'enquiry'}
 
+          <!-- Input mode selector -->
           <div class="form-section">
-            <div class="section-title">Enquiry Subject <span class="req">*</span></div>
-            <input type="text" bind:value={enquirySubject} placeholder="e.g. Where is my order? / Can I change my delivery address?" />
-          </div>
-
-          <div class="form-section">
-            <div class="section-title">Enquiry Category <span class="req">*</span></div>
-            <div class="enquiry-cat-grid">
-              {#each ENQUIRY_CATEGORIES as cat}
-                <button class="enquiry-cat-card" class:selected={enquiryCategory === cat.id} on:click={() => enquiryCategory = cat.id}>
-                  <span class="cat-icon">{cat.icon}</span>
-                  <span class="cat-label">{cat.label}</span>
-                </button>
-              {/each}
+            <div class="section-title">Input Mode</div>
+            <div class="input-mode-tabs">
+              <button class="mode-tab" class:active={enquiryInputMode === 'email'} on:click={() => enquiryInputMode = 'email'}>
+                <span class="mode-tab-icon">✉</span>
+                <div class="mode-tab-body">
+                  <span class="mode-tab-label">Email / Text Message</span>
+                  <span class="mode-tab-desc">Paste or type the customer's email, live chat or any written message</span>
+                </div>
+              </button>
+              <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
+                <span class="mode-tab-icon">🎙</span>
+                <div class="mode-tab-body">
+                  <span class="mode-tab-label">Voicemail</span>
+                  <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                </div>
+              </button>
             </div>
           </div>
-
-          <div class="step-actions">
-            <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            <button class="btn btn-primary" disabled={!step2Valid} on:click={nextStep}>Next: Review & Submit →</button>
-          </div>
-
 
         <!-- ═══ STEP 3A: Financials (Return) ═══ -->
         {:else if step === 3 && ticketType === 'return'}
@@ -723,40 +1068,6 @@
           </div>
 
 
-        <!-- ═══ STEP 3B: Review (Enquiry) ═══ -->
-        {:else if step === 3 && ticketType === 'enquiry'}
-
-          <div class="form-section">
-            <div class="section-title">Priority</div>
-            <div class="chip-group">
-              {#each PRIORITIES as p}
-                <button class="chip priority-chip priority-{p.id}" class:selected={priority === p.id} on:click={() => priority = p.id}>{p.label}</button>
-              {/each}
-            </div>
-          </div>
-
-          <div class="form-section review-section">
-            <div class="section-title">Review Summary</div>
-            <div class="review-grid">
-              <div class="review-item"><span class="review-label">Customer</span><span class="review-val">{custName} <span class="tier-mini tier-{custTier.toLowerCase()}">{custTier}</span></span></div>
-              <div class="review-item"><span class="review-label">Channel</span><span class="review-val">{CHANNELS.find(c => c.id === channel)?.icon} {CHANNELS.find(c => c.id === channel)?.label}</span></div>
-              <div class="review-item"><span class="review-label">Subject</span><span class="review-val">{enquirySubject}</span></div>
-              <div class="review-item"><span class="review-label">Category</span><span class="review-val">{ENQUIRY_CATEGORIES.find(c => c.id === enquiryCategory)?.icon} {ENQUIRY_CATEGORIES.find(c => c.id === enquiryCategory)?.label}</span></div>
-            </div>
-            <div class="review-complaint">
-              <span class="review-label">Customer Notes</span>
-              <p>{complaintDesc}</p>
-            </div>
-          </div>
-
-          {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
-
-          <div class="step-actions">
-            <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            <button class="btn btn-submit enquiry-submit" disabled={submitting} on:click={handleSubmit}>
-              {#if submitting}<span class="spinner-sm"></span> Creating…{:else}✦ Create Enquiry Ticket{/if}
-            </button>
-          </div>
         {/if}
 
       </div>
@@ -998,6 +1309,98 @@
   .success-id   { font-family: var(--font-mono); font-size: 18px; color: var(--amber); font-weight: 600; margin-bottom: 16px; }
   .success-detail { font-size: 14px; color: var(--text-secondary); line-height: 1.7; margin-bottom: 28px; }
   .success-actions { display: flex; gap: 10px; justify-content: center; }
+
+  /* Enquiry start notice */
+  .enquiry-start-notice { display: flex; align-items: flex-start; gap: 16px; border-color: rgba(91,140,240,0.3); background: var(--blue-dim); }
+  .notice-icon { font-size: 24px; flex-shrink: 0; padding-top: 2px; }
+  .notice-body { display: flex; flex-direction: column; gap: 5px; }
+  .notice-body strong { font-size: 13.5px; color: var(--text-primary); }
+  .notice-body span { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; }
+
+  /* Input mode tabs */
+  .input-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .mode-tab { display: flex; align-items: center; gap: 14px; padding: 16px 18px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; text-align: left; }
+  .mode-tab:hover:not(:disabled) { border-color: rgba(212,168,67,0.3); }
+  .mode-tab.active { border-color: rgba(212,168,67,0.5); background: var(--amber-glow); }
+  .mode-tab-disabled { opacity: 0.45; cursor: not-allowed !important; }
+  .mode-tab-icon { font-size: 22px; flex-shrink: 0; }
+  .mode-tab-body { display: flex; flex-direction: column; gap: 4px; }
+  .mode-tab-label { font-size: 13.5px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .mode-tab.active .mode-tab-label { color: var(--amber); }
+  .mode-tab-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+  .soon-badge { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 7px; border-radius: 3px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); }
+
+  /* Demo samples */
+  .sample-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .sample-card { text-align: left; padding: 12px 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 6px; }
+  .sample-card:hover { border-color: rgba(212,168,67,0.4); background: var(--amber-glow); }
+  .sample-card.seller:hover { border-color: rgba(91,140,240,0.4); background: var(--blue-dim); }
+  .sample-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .sample-label { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+  .sample-from  { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+  .sample-type-badge { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 3px; flex-shrink: 0; }
+  .sample-type-customer { color: var(--green);  background: var(--green-dim);  border: 1px solid rgba(76,175,130,0.3); }
+  .sample-type-seller   { color: var(--blue);   background: var(--blue-dim);   border: 1px solid rgba(91,140,240,0.3); }
+  .sample-type-other    { color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border); }
+
+  /* Sender type group */
+  .sender-row { display: flex; align-items: center; }
+  .sender-type-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .sender-type-btn { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 20px; font-size: 12.5px; font-weight: 600; background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
+  .sender-type-btn:hover { border-color: rgba(212,168,67,0.3); color: var(--text-secondary); }
+  .sender-type-btn.active { border-color: rgba(212,168,67,0.5); color: var(--amber); background: var(--amber-glow); }
+
+  /* Message body */
+  .message-body-area { font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; resize: vertical; min-height: 200px; }
+  .char-count-badge { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); padding: 2px 8px; border-radius: 3px; }
+  .review-msg-body { white-space: pre-wrap; font-family: var(--font-mono); font-size: 12px; max-height: 180px; overflow-y: auto; }
+  .review-val.mono { font-family: var(--font-mono); font-size: 12.5px; }
+
+  /* ── Voicemail recorder ─────────────────────────────────────────────── */
+  .vm-section { min-height: 140px; }
+
+  /* Idle */
+  .vm-idle { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 28px 0; }
+  .vm-record-btn { display: flex; align-items: center; gap: 10px; padding: 14px 28px; background: var(--red-dim); border: 1px solid rgba(224,92,92,0.4); border-radius: var(--radius-md); color: var(--red); font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.15s; }
+  .vm-record-btn:hover { background: rgba(224,92,92,0.2); transform: scale(1.02); }
+  .vm-mic-icon { font-size: 20px; }
+  .vm-hint { font-size: 12px; color: var(--text-muted); text-align: center; max-width: 420px; line-height: 1.5; }
+
+  /* Recording in progress */
+  .vm-recording { display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 28px 0; }
+  .vm-pulse-ring { position: relative; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; }
+  .vm-pulse-ring::before, .vm-pulse-ring::after {
+    content: ''; position: absolute; border-radius: 50%;
+    border: 2px solid var(--red); opacity: 0;
+    animation: vm-pulse 1.6s ease-out infinite;
+  }
+  .vm-pulse-ring::after { animation-delay: 0.8s; }
+  .vm-pulse-dot { width: 28px; height: 28px; background: var(--red); border-radius: 50%; position: relative; z-index: 1; box-shadow: 0 0 12px rgba(224,92,92,0.5); }
+  @keyframes vm-pulse {
+    0%   { width: 28px; height: 28px; top: 18px; left: 18px; opacity: 0.8; }
+    100% { width: 64px; height: 64px; top: 0; left: 0; opacity: 0; }
+  }
+  .vm-recording-info { display: flex; align-items: center; gap: 12px; }
+  .vm-rec-label { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--red); background: var(--red-dim); border: 1px solid rgba(224,92,92,0.3); padding: 2px 8px; border-radius: 3px; letter-spacing: 0.1em; animation: vm-blink 1s step-end infinite; }
+  @keyframes vm-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+  .vm-timer { font-family: var(--font-mono); font-size: 28px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.05em; }
+  .vm-stop-btn { display: flex; align-items: center; gap: 8px; padding: 11px 24px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .vm-stop-btn:hover { border-color: rgba(224,92,92,0.4); color: var(--red); }
+
+  /* Preview */
+  .vm-preview { display: flex; flex-direction: column; gap: 12px; }
+  .vm-preview-header { display: flex; align-items: center; justify-content: space-between; }
+  .vm-preview-label { font-size: 13px; font-weight: 600; color: var(--green); }
+  .vm-preview-duration { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+  .vm-audio-player { width: 100%; height: 36px; accent-color: var(--amber); }
+  .vm-actions { display: flex; align-items: center; gap: 10px; }
+  .vm-transcribe-btn { background: var(--amber-glow); border-color: rgba(212,168,67,0.4); color: var(--amber); font-size: 13px; font-weight: 700; }
+  .vm-transcribe-btn:hover:not(:disabled) { background: rgba(212,168,67,0.2); }
+  .vm-transcribed-badge { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); color: var(--green); font-size: 12.5px; font-weight: 600; }
+  .vm-s3-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--text-muted); }
+  .vm-s3-badge code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); word-break: break-all; }
+  .vm-s3-icon { font-size: 15px; flex-shrink: 0; }
+  .vm-error { padding: 8px 12px; background: var(--red-dim); border: 1px solid rgba(224,92,92,0.3); border-radius: var(--radius-sm); color: var(--red); font-size: 12px; }
 
   /* Spinner */
   .spinner-sm { width: 13px; height: 13px; border: 2px solid rgba(0,0,0,0.2); border-top-color: currentColor; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }

@@ -18,6 +18,7 @@
   $: isReturns   = path === '/dashboard' || path === '/dashboard/';
   $: isEnquiries = path.startsWith('/dashboard/enquiries');
   $: isCreate    = path.startsWith('/dashboard/create');
+  $: isInstagramPosts = path.startsWith('/dashboard/instagram-posts');
   $: isAnalytics = false;
   $: isPolicy    = false;
 </script>
@@ -60,6 +61,15 @@
 
       <!-- Tools section -->
       <div class="nav-section-label" style="margin-top:12px">Tools</div>
+
+      <a href="/dashboard/instagram-posts" class="nav-item" class:active={isInstagramPosts}>
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <rect x="3.5" y="3.5" width="17" height="17" rx="5"/>
+          <circle cx="12" cy="12" r="3.5"/>
+          <circle cx="17.5" cy="6.5" r="1"/>
+        </svg>
+        Instagram Posts Creation
+      </a>
 
       <a href="/dashboard" class="nav-item disabled">
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">

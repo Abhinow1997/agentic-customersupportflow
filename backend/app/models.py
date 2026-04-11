@@ -247,6 +247,9 @@ class CreateTicketRequest(BaseModel):
     channel: str = "email"
     priority: str = "medium"
     complaint_desc: str = Field("", alias="complaintDesc")
+    # packaging assessment
+    packaging_condition: str = Field("", alias="packagingCondition")
+    packaging_factor: float = Field(0.0, alias="packagingFactor")
     # return-specific
     item: CreateTicketItemInput | None = None
     reason_sk: int | None = Field(None, alias="reasonSk")

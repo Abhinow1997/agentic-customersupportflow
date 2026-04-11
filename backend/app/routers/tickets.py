@@ -243,8 +243,43 @@ async def create_ticket(body: CreateTicketRequest) -> CreateTicketResponse:
         # reason_sk: use provided value or default to 1 (free text reason stored in SR_RESOLUTION)
         reason_sk = int(body.reason_sk or 1)
 
-        # Store the assessment reason text + complaint notes in SR_RESOLUTION
-        resolution_text = body.reason_desc or body.complaint_desc or ''
+        # Build a rich structured resolution string combining all context:
+        # product details + packaging assessment + financials + agent reason + complaint
+        item_name     = body.item.name     if body.item else 'Unknown Item'
+        item_brand    = body.item.brand    if body.item else ''
+        item_category = body.item.category if body.item else ''
+        item_price    = body.item.price    if body.item else '0'
+        qty           = return_qty
+
+        pkg_label_map = {
+            'sealed':    'Sealed / Unopened (0% degradation)',
+            'intact':    'Intact / Good (+10% degradation)',
+            'minor':     'Minor Damage (+25% degradation)',
+            'moderate':  'Moderate Damage (+50% degradation)',
+            'heavy':     'Heavily Damaged (+80% degradation)',
+            'destroyed': 'Destroyed / Unusable (+100% degradation)',
+        }
+        pkg_condition = body.packaging_condition or ''
+        pkg_label     = pkg_label_map.get(pkg_condition, pkg_condition or 'Not assessed')
+        pkg_factor    = float(body.packaging_factor or 0)
+
+        brand_str    = f' ({item_brand})' if item_brand else ''
+        category_str = f' [{item_category}]' if item_category else ''
+
+        resolution_parts = [
+            f'ITEM: {item_name}{brand_str}{category_str}',
+            f'UNIT PRICE: ${float(item_price):.2f} | QTY RETURNED: {qty} | TOTAL VALUE: ${float(item_price) * qty:.2f}',
+            f'PACKAGING ASSESSMENT: {pkg_label}',
+            f'FINANCIALS: Return Amt ${return_amt:.2f} | Fee ${fee:.2f} | Net Loss ${net_loss:.2f} (formula: ${return_amt:.2f} x 0.4 x {1 + pkg_factor:.2f})',
+        ]
+
+        if body.reason_desc:
+            resolution_parts.append(f'RETURN REASON: {body.reason_desc}')
+
+        if body.complaint_desc:
+            resolution_parts.append(f'AGENT NOTES: {body.complaint_desc}')
+
+        resolution_text = ' | '.join(resolution_parts)
         safe_resolution = resolution_text.replace("'", "''")
 
         insert_sql = f"""

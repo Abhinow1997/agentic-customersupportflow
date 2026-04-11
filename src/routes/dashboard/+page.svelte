@@ -62,6 +62,26 @@
   function resolutionColor(id) { return RESOLUTION_OPTIONS.find(o => o.id === id)?.color ?? 'amber'; }
   function resolutionIcon(id)  { return RESOLUTION_OPTIONS.find(o => o.id === id)?.icon  ?? '—'; }
 
+  // Detect and parse the structured SR_RESOLUTION string written by the create endpoint.
+  // Format: "ITEM: ... | UNIT PRICE: ... | PACKAGING ASSESSMENT: ... | FINANCIALS: ... | RETURN REASON: ... | AGENT NOTES: ..."
+  function isStructuredResolution(str) {
+    return typeof str === 'string' && str.startsWith('ITEM:');
+  }
+
+  function parseStructuredResolution(str) {
+    if (!str) return null;
+    const parts = str.split(' | ');
+    const out = {};
+    for (const part of parts) {
+      const colon = part.indexOf(':');
+      if (colon === -1) continue;
+      const key = part.slice(0, colon).trim();
+      const val = part.slice(colon + 1).trim();
+      out[key] = val;
+    }
+    return out;
+  }
+
   // ── UI state machine ──────────────────────────────────────────────────────
   // stages: 'idle' | 'manual_selecting' | 'manual_selected' | 'ai_loading' | 'ai_shown' | 'confirmed'
   let uiStage            = 'idle';
@@ -163,17 +183,26 @@
               <span class="row-status-dot status-dot-{(t.status ?? 'Open').toLowerCase()}"></span>
               <span class="return-date">{formatDate(t.created)}</span>
             </div>
-            <div class="row-product">{t.id}</div>
+            <div class="row-product">{t.item?.name ? (t.item.name.length > 42 ? t.item.name.slice(0,42)+'…' : t.item.name) : t.id}</div>
             <div class="row-meta">
               <span class="row-customer">{t.customer?.name ?? '—'}</span>
               <span class="row-category">{t.item?.category ?? '—'}</span>
             </div>
             <div class="row-bottom">
-              <span class="row-reason">{t.returnReason ?? '—'}</span>
+              {#if isStructuredResolution(t.resolution)}
+                {@const parsed = parseStructuredResolution(t.resolution)}
+                <span class="row-reason">{parsed['RETURN REASON'] ?? parsed['PACKAGING ASSESSMENT'] ?? t.returnReason ?? '—'}</span>
+              {:else}
+                <span class="row-reason">{t.returnReason ?? '—'}</span>
+              {/if}
               <span class="row-amt">{formatAmt(t.returnAmt)}</span>
             </div>
             {#if t.resolution}
-              <div class="row-resolution">✓ {resolutionLabel(t.resolution)}</div>
+              {#if isStructuredResolution(t.resolution)}
+                <div class="row-resolution row-resolution-manual">✓ Manual Return · {parseStructuredResolution(t.resolution)['PACKAGING ASSESSMENT']?.split('(')[0]?.trim() ?? 'Assessed'}</div>
+              {:else}
+                <div class="row-resolution">✓ {resolutionLabel(t.resolution)}</div>
+              {/if}
             {/if}
           </button>
         {/each}
@@ -198,12 +227,64 @@
               <div class="header-ids">
                 <span class="detail-id">{t.id}</span>
                 <span class="status-badge status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
+                {#if isStructuredResolution(t.resolution)}<span class="manual-badge">✎ Manual Entry</span>{/if}
               </div>
               <span class="return-date-large">{formatDate(t.created)}</span>
             </div>
-            <h3 class="detail-title">{t.id}</h3>
-            <div class="detail-reason">Reason: {t.returnReason ?? '—'}</div>
+            <h3 class="detail-title">{t.item?.name ?? t.id}</h3>
+            <div class="detail-reason">
+              {#if isStructuredResolution(t.resolution)}
+                {parseStructuredResolution(t.resolution)['RETURN REASON'] ?? t.returnReason ?? '—'}
+              {:else}
+                {t.returnReason ?? '—'}
+              {/if}
+            </div>
           </div>
+
+          {#if isStructuredResolution(t.resolution)}
+            {@const ra = parseStructuredResolution(t.resolution)}
+            <div class="detail-section assessment-section">
+              <div class="section-label">✓ Return Assessment <span class="manual-tag">Manual Entry</span></div>
+              <div class="assessment-grid">
+                {#if ra['ITEM']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Product</span>
+                    <span class="ab-val">{ra['ITEM']}</span>
+                  </div>
+                {/if}
+                {#if ra['UNIT PRICE']}
+                  <div class="assessment-block">
+                    <span class="ab-label">Unit Price / Qty / Total</span>
+                    <span class="ab-val mono">{ra['UNIT PRICE']}</span>
+                  </div>
+                {/if}
+                {#if ra['PACKAGING ASSESSMENT']}
+                  <div class="assessment-block">
+                    <span class="ab-label">Packaging Condition</span>
+                    <span class="ab-val pkg">{ra['PACKAGING ASSESSMENT']}</span>
+                  </div>
+                {/if}
+                {#if ra['FINANCIALS']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Financials Breakdown</span>
+                    <span class="ab-val mono">{ra['FINANCIALS']}</span>
+                  </div>
+                {/if}
+                {#if ra['RETURN REASON']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Return Reason (AI Generated)</span>
+                    <span class="ab-val reason-text">{ra['RETURN REASON']}</span>
+                  </div>
+                {/if}
+                {#if ra['AGENT NOTES']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Agent Notes</span>
+                    <span class="ab-val notes-text">{ra['AGENT NOTES']}</span>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
 
           <div class="two-col">
             <div class="detail-section">
@@ -606,4 +687,21 @@
   .ai-loading-block .spinner-sm{border-color:rgba(212,168,67,0.3);border-top-color:var(--amber)}
   .ai-error-banner{padding:10px 14px;background:var(--red-dim);border:1px solid rgba(224,92,92,0.3);border-radius:var(--radius-sm);color:var(--red);font-size:12px;margin-bottom:10px}
   .ai-tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;color:var(--amber);background:var(--amber-glow);border:1px solid rgba(212,168,67,0.3)}
+
+  /* Manual entry badges */
+  .manual-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:var(--blue);background:var(--blue-dim);border:1px solid rgba(91,140,240,0.3)}
+  .manual-tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;color:var(--blue);background:var(--blue-dim);border:1px solid rgba(91,140,240,0.3)}
+  .row-resolution-manual{color:var(--blue);}
+
+  /* Assessment section */
+  .assessment-section{border-color:rgba(91,140,240,0.25);background:rgba(91,140,240,0.03);margin-bottom:12px}
+  .assessment-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .assessment-block{display:flex;flex-direction:column;gap:5px;padding:10px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm)}
+  .assessment-block.full-width{grid-column:1/-1}
+  .ab-label{font-size:9.5px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.09em;font-family:var(--font-mono)}
+  .ab-val{font-size:13px;color:var(--text-primary);line-height:1.5}
+  .ab-val.mono{font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)}
+  .ab-val.pkg{color:var(--amber);font-weight:600}
+  .ab-val.reason-text{color:var(--text-primary);font-style:italic;font-size:13.5px;line-height:1.6}
+  .ab-val.notes-text{color:var(--text-muted);font-size:12.5px}
 </style>

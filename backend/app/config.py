@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "./chroma_walmart_policies"
     CHROMA_COLLECTION: str = "walmart_policies"
 
+    # ── AWS S3 ──────────────────────────────────────────────────────────────
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    AWS_REGION: str = "us-east-1"
+    S3_BUCKET_NAME: str = "arcella-voicemails"
+
     # ── CORS ───────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",   # SvelteKit dev

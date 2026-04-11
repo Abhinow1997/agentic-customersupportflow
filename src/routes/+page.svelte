@@ -46,22 +46,7 @@
       </div>
       <div class="tagline">Customer Operations Platform</div>
 
-      <div class="stats">
-        <div class="stat">
-          <span class="stat-number">6</span>
-          <span class="stat-label">Open Tickets</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-number">2</span>
-          <span class="stat-label">Critical</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat">
-          <span class="stat-number">94%</span>
-          <span class="stat-label">AI Coverage</span>
-        </div>
-      </div>
+      <div class="brand-divider"></div>
 
       <div class="feature-list">
         <div class="feature">
@@ -209,37 +194,12 @@
     margin-bottom: 56px;
   }
 
-  .stats {
-    display: flex;
-    align-items: center;
-    gap: 24px;
+  .brand-divider {
+    width: 48px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--amber), transparent);
     margin-bottom: 48px;
-    padding: 24px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-  }
-
-  .stat { text-align: center; flex: 1; }
-  .stat-number {
-    display: block;
-    font-family: var(--font-mono);
-    font-size: 28px;
-    font-weight: 500;
-    color: var(--amber);
-    line-height: 1;
-    margin-bottom: 4px;
-  }
-  .stat-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .stat-divider {
-    width: 1px;
-    height: 36px;
-    background: var(--border);
+    border-radius: 2px;
   }
 
   .feature-list {

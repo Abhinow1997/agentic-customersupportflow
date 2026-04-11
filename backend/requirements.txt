@@ -1,10 +1,12 @@
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+boto3==1.35.99
 pydantic==2.9.2
 pydantic-settings==2.6.1
 snowflake-connector-python==3.12.3
 python-dotenv==1.0.1
-
+cryptography>=43.0.1
 # ── LangGraph ──────────────────────────────────────────────────────────────
 # langchain-anthropic and anthropic removed — all LLM calls go through LiteLLM
 langchain==0.3.25
@@ -12,10 +14,9 @@ langchain-core==0.3.58
 langgraph==0.4.1
 
 # ── LiteLLM — unified LLM gateway (OpenAI + any other provider) ───────────
-# Pinned to 1.52.1 — versions above have a Windows cp1252 regression where
-# litellm/utils.py opens its model pricing JSON without utf-8 encoding.
-litellm==1.52.1
+litellm==1.57.4
 openai==1.57.4
+crewai==0.100.0
 
 # ── RAG Pipeline (ChromaDB + Scrapling) ────────────────────────────────────
 # Install in stages:

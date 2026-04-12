@@ -1,11 +1,13 @@
 """
 POST /api/instagram-posts/generate        — sync (full result at once)
 POST /api/instagram-posts/generate-stream — SSE stream (events per agent stage)
+POST /api/instagram-posts/generate-image  — DALL-E-2 image from visual prompt
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from typing import Any, AsyncGenerator
 
@@ -19,8 +21,10 @@ from app.agents.instagram_crewai_flow import (
     InstagramFlowInput,
     run_instagram_crewai_flow,
 )
+from app.config import get_settings
 
 router = APIRouter(prefix="/api/instagram-posts", tags=["instagram-posts"])
+logger = logging.getLogger("routers.instagram_posts")
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -34,7 +38,6 @@ class InstagramWorkflowRequest(BaseModel):
     product_marketing_campaign_caption: str = Field(
         ..., min_length=5, alias="productMarketingCampaignCaption"
     )
-
     model_config = {"populate_by_name": True}
 
 
@@ -44,7 +47,6 @@ class GeneratedPost(BaseModel):
     hashtags: list[str]
     visual_direction: str = Field(..., alias="visualDirection")
     cta: str
-
     model_config = {"populate_by_name": True}
 
 
@@ -63,7 +65,18 @@ class InstagramWorkflowResponse(BaseModel):
     validation_result: dict[str, Any] = Field(default_factory=dict, alias="validationResult")
     agent_outputs: list[dict[str, Any]] = Field(default_factory=list, alias="agentOutputs")
     warnings: list[str] = Field(default_factory=list)
+    model_config = {"populate_by_name": True}
 
+
+class ImageGenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=5, max_length=1000)
+
+
+class ImageGenerateResponse(BaseModel):
+    image_url: str = Field(..., alias="imageUrl")
+    prompt: str
+    model: str
+    size: str
     model_config = {"populate_by_name": True}
 
 
@@ -85,7 +98,7 @@ def _validate_product_ref(payload: InstagramWorkflowRequest) -> None:
         raise HTTPException(status_code=400, detail="Provide either productItemSk or productName.")
 
 
-# ── Sync endpoint (unchanged behaviour) ──────────────────────────────────────
+# ── Sync endpoint ─────────────────────────────────────────────────────────────
 
 @router.post(
     "/generate",
@@ -97,7 +110,6 @@ async def generate_instagram_posts(
 ) -> InstagramWorkflowResponse:
     _validate_product_ref(payload)
     flow_input = _build_flow_input(payload)
-
     try:
         result = run_instagram_crewai_flow(flow_input)
     except AlignmentError as exc:
@@ -106,7 +118,6 @@ async def generate_instagram_posts(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Instagram crew workflow failed: {exc}") from exc
-
     return InstagramWorkflowResponse.model_validate(result)
 
 
@@ -126,7 +137,6 @@ async def generate_instagram_posts_stream(
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
     def event_callback(event: dict) -> None:
-        """Called from the background thread for each pipeline event."""
         asyncio.run_coroutine_threadsafe(queue.put(event), loop)
 
     def run_in_thread() -> None:
@@ -144,7 +154,7 @@ async def generate_instagram_posts_stream(
                 queue.put({"type": "flow_error", "error": f"Workflow failed: {exc}"}), loop
             )
         finally:
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop)  # sentinel
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
     thread = threading.Thread(target=run_in_thread, daemon=True)
     thread.start()
@@ -165,3 +175,84 @@ async def generate_instagram_posts_stream(
             "Connection": "keep-alive",
         },
     )
+
+
+# ── DALL-E image generation endpoint ─────────────────────────────────────────
+
+@router.post(
+    "/generate-image",
+    response_model=ImageGenerateResponse,
+    summary="Generate a visual suggestion image with DALL-E from the content agent's visual prompt",
+)
+async def generate_image(payload: ImageGenerateRequest) -> ImageGenerateResponse:
+    settings = get_settings()
+
+    if not settings.OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured.")
+
+    # DALL-E-2 prompt length limit is 1000 chars; DALL-E-3 is 4000.
+    prompt = payload.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt must not be empty.")
+
+    logger.info(
+        "DALLE_REQUEST model=%s size=%s prompt_len=%d",
+        settings.DALLE_MODEL,
+        settings.DALLE_IMAGE_SIZE,
+        len(prompt),
+    )
+
+    try:
+        # Run blocking OpenAI call in a thread so we don't block the event loop
+        loop = asyncio.get_event_loop()
+        image_url = await loop.run_in_executor(
+            None,
+            lambda: _call_dalle(
+                api_key=settings.OPENAI_API_KEY,
+                model=settings.DALLE_MODEL,
+                prompt=prompt,
+                size=settings.DALLE_IMAGE_SIZE,
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("DALLE_ERROR %s", exc)
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {exc}") from exc
+
+    logger.info("DALLE_COMPLETE url_prefix=%s", image_url[:60] if image_url else "none")
+
+    return ImageGenerateResponse.model_validate(
+        {
+            "imageUrl": image_url,
+            "prompt": prompt,
+            "model": settings.DALLE_MODEL,
+            "size": settings.DALLE_IMAGE_SIZE,
+        }
+    )
+
+
+def _call_dalle(api_key: str, model: str, prompt: str, size: str) -> str:
+    """Synchronous DALL-E call — runs inside a thread executor."""
+    from openai import OpenAI, BadRequestError
+
+    client = OpenAI(api_key=api_key)
+    try:
+        response = client.images.generate(
+            model=model,
+            prompt=prompt,
+            size=size,  # type: ignore[arg-type]
+            n=1,
+            response_format="url",
+        )
+    except BadRequestError as exc:
+        # Surface DALL-E content policy rejections clearly
+        raise HTTPException(
+            status_code=422,
+            detail=f"DALL-E rejected the prompt (content policy): {exc}",
+        ) from exc
+
+    url = response.data[0].url
+    if not url:
+        raise ValueError("DALL-E returned an empty image URL.")
+    return url

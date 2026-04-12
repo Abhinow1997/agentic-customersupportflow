@@ -728,31 +728,89 @@ def _critique_content(
     run_id: str,
     memory_context: list[str],
 ) -> dict[str, Any]:
-    guidelines = [
-        "Claims must be grounded in validated product summary.",
-        "Caption should start with a hook in first line.",
-        "Tone should be confident, simple, and shareable.",
-        "CTA should be singular and explicit.",
-        "Avoid vague adjectives with no product signal.",
+    # Detailed criteria — each one demands a specific, quotable finding
+    criteria = [
+        {
+            "id": "hook_strength",
+            "rule": "The first sentence of every caption must be a hook that creates immediate curiosity, urgency, or a bold claim. It must NOT start with the brand/product name or a generic opener like 'Introducing' or 'Meet'.",
+            "bad_example": "Introducing our new wireless earbuds — great sound for everyday use.",
+            "good_example": "You've been tolerating bad audio. That ends today.",
+        },
+        {
+            "id": "claim_grounding",
+            "rule": "Every factual claim (price, specs, features, availability) must trace directly to the validated product summary. Flag any claim that is invented, approximate, or unverifiable from the source data.",
+            "bad_example": "Industry-leading 40-hour battery life.",
+            "good_example": "Up to 28 hours of playback — verified from product specs.",
+        },
+        {
+            "id": "cta_specificity",
+            "rule": "Each post must have exactly ONE call-to-action. It must name the specific action (e.g. 'Tap the link in bio', 'DM us SIZE', 'Save this post'). Generic CTAs like 'Shop now' or 'Check it out' are NOT acceptable.",
+            "bad_example": "Shop now and save!",
+            "good_example": "Tap the link in bio to grab yours before the weekend sale ends.",
+        },
+        {
+            "id": "adjective_ban",
+            "rule": "Remove all empty adjectives: amazing, great, incredible, awesome, perfect, best, premium, top-quality, cutting-edge, revolutionary. Each descriptor must be replaced with a concrete product fact or sensory detail.",
+            "bad_example": "Premium sound quality for an amazing listening experience.",
+            "good_example": "40mm drivers tuned for bass that hits without muddying the mids.",
+        },
+        {
+            "id": "hashtag_relevance",
+            "rule": "Hashtags must be specific to the product category, campaign theme, or target audience. Reject generic filler tags (#Love, #Happy, #Life, #Instagood, #PhotoOfTheDay). At least 60% of hashtags must be niche or product-specific.",
+            "bad_example": "#Love #Happy #ShopNow #Instagood #Life",
+            "good_example": "#WirelessEarbuds #WorkFromHome #AudioGear #NoiseCancel",
+        },
+        {
+            "id": "caption_length",
+            "rule": "Instagram captions should be 3-5 lines max for the visible portion before 'more'. The hook line must stand alone in the first line. Body copy must not exceed 2 sentences. Verbose copy kills engagement.",
+            "bad_example": "A four-paragraph caption describing every feature in full detail.",
+            "good_example": "Hook line.\n\nOne-sentence benefit. One-sentence proof.\n\nCTA.",
+        },
+        {
+            "id": "visual_post_alignment",
+            "rule": "The visualDirection for each post must describe a specific scene, composition, or creative treatment — not just 'product on white background'. It should include subject, setting, lighting mood, and focal point.",
+            "bad_example": "Clean product shot on white background.",
+            "good_example": "Overhead flat-lay on weathered oak desk: earbuds case open, coffee cup left-side, soft morning light from right, negative space for caption overlay.",
+        },
     ]
+
     response = _run_agent_json(
         role="Critique Agent",
         goal=(
-            "Critique current Instagram content against campaign quality guidelines and return "
-            "clear fix instructions."
+            "Deliver a surgical, post-by-post critique of the Instagram content. "
+            "Quote the exact text that fails each criterion and provide a concrete rewrite. "
+            "No generic feedback. No vague suggestions. Every must_fix item must name the post "
+            "index (0, 1, or 2), the criterion id, the offending text in quotes, and the rewrite."
         ),
         backstory=(
-            "You are the quality bar for social campaigns and provide practical revision points."
+            "You are a senior social media creative director who has reviewed thousands of "
+            "Instagram campaigns. You reject vague feedback. Your notes are always specific, "
+            "actionable, and tied to exact copy from the content under review. "
+            "You never say 'improve the hook' — you say what is wrong with this hook and "
+            "provide the replacement line."
         ),
         description=(
-            f"Critique round {round_idx}.\n"
-            "Return JSON with keys: round_feedback, must_fix, score.\n\n"
-            f"Guidelines:\n{json.dumps(guidelines, indent=2)}\n\n"
-            f"Current Content:\n{json.dumps(content_output, default=str, indent=2)}\n\n"
-            f"User Method:\n{payload.method_section_content}"
+            f"CRITIQUE ROUND {round_idx} — read every post caption word-by-word.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. For each failing criterion, quote the EXACT offending text from the content.\n"
+            "2. State which specific rule it violates (use the criterion id).\n"
+            "3. Provide a concrete rewrite of that specific text — not a general direction.\n"
+            "4. Score each criterion 0-10 in criterion_scores (object with criterion ids as keys).\n"
+            "5. Compute overall score as the mean of criterion scores.\n\n"
+            "must_fix format (each item is a string):\n"
+            '  "[Post N][criterion_id] FOUND: \'<exact quoted text>\' → FIX: <rewrite>\'"\n\n'
+            "Return JSON with keys: round_feedback, must_fix, criterion_scores, score.\n\n"
+            f"CRITERIA:\n{json.dumps(criteria, indent=2)}\n\n"
+            f"CONTENT TO CRITIQUE:\n{json.dumps(content_output, default=str, indent=2)}\n\n"
+            f"CAMPAIGN INTENT (user method):\n{payload.method_section_content}\n\n"
+            f"CAMPAIGN CAPTION SEED:\n{payload.product_marketing_campaign_caption}"
         ),
         expected_output=(
-            "Valid JSON with round_feedback (string), must_fix (array of strings), score (number 0-10)."
+            "Valid JSON with: "
+            "round_feedback (string — 2-3 sentence overall assessment), "
+            "must_fix (array of specific fix strings in the format [Post N][criterion_id] FOUND/FIX), "
+            "criterion_scores (object: criterion_id -> score 0-10), "
+            "score (number 0-10, mean of criterion_scores)."
         ),
         run_id=run_id,
         memory_context=memory_context,
@@ -762,12 +820,24 @@ def _critique_content(
     if not isinstance(must_fix, list):
         must_fix = []
 
+    criterion_scores = response.get("criterion_scores")
+    if not isinstance(criterion_scores, dict):
+        criterion_scores = {}
+
+    # Derive score from criterion_scores if present, else fall back to reported score
+    if criterion_scores:
+        vals = [v for v in criterion_scores.values() if isinstance(v, (int, float))]
+        computed_score = round(sum(vals) / len(vals), 2) if vals else float(response.get("score", 6.0))
+    else:
+        computed_score = float(response.get("score", 6.0))
+
     out = {
         "round_feedback": str(response.get("round_feedback", "Content reviewed.")),
-        "must_fix": [str(x) for x in must_fix][:10],
-        "score": float(response.get("score", 7.0)),
+        "must_fix": [str(x) for x in must_fix][:20],
+        "criterion_scores": {str(k): float(v) for k, v in criterion_scores.items() if isinstance(v, (int, float))},
+        "score": computed_score,
     }
-    _log_event(run_id, "CRITIQUE_OUTPUT", {"round": round_idx, "score": out["score"]})
+    _log_event(run_id, "CRITIQUE_OUTPUT", {"round": round_idx, "score": out["score"], "fixes": len(out["must_fix"])})
     return out
 
 

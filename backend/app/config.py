@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # ── LLM ───────────────────────────────────────────────────────────────
     OPENAI_API_KEY: str = ""
 
+    # ── Image Generation (DALL-E) ─────────────────────────────────────────
+    DALLE_MODEL: str = "dall-e-2"
+    DALLE_IMAGE_SIZE: str = "512x512"   # dall-e-2 valid: 256x256 | 512x512 | 1024x1024
+
     # ── ChromaDB (RAG) ─────────────────────────────────────────────────────
     CHROMA_PERSIST_DIR: str = "./chroma_walmart_policies"
     CHROMA_COLLECTION: str = "walmart_policies"

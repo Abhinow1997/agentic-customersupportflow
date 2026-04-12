@@ -28,4 +28,4 @@ crewai==0.100.0
 chromadb
 tiktoken
 PyPDF2
-scrapling
+scrapling[fetchers]

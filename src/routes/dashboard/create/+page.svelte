@@ -14,8 +14,6 @@
   let submitSuccess = false;
   let createdTicketId = '';
 
-  // ── No Snowflake reason list needed — free text entry ─────────────────────
-
   // ── Customer lookup ──────────────────────────────────────────────────────
   let lookupEmail    = '';
   let lookupLoading  = false;
@@ -36,20 +34,18 @@
 
   // ── Package assessment ────────────────────────────────────────────────────
   let packagingCondition = '';       // one of PACKAGING_CONDITIONS ids
+  let assessmentLoading  = false;
+  let assessmentComplete = false;
+  let assessmentError    = '';
 
   const PACKAGING_CONDITIONS = [
-    { id: 'sealed',    label: 'Sealed / Unopened',    desc: 'Original seal intact, never opened',         factor: 0.00, badge: '0%',   color: 'green'  },
-    { id: 'intact',    label: 'Intact / Good',         desc: 'Opened but packaging fully undamaged',       factor: 0.10, badge: '+10%', color: 'green'  },
-    { id: 'minor',     label: 'Minor Damage',          desc: 'Small dents, scuffs or torn edges',          factor: 0.25, badge: '+25%', color: 'amber'  },
-    { id: 'moderate',  label: 'Moderate Damage',       desc: 'Visible damage, partially compromised',      factor: 0.50, badge: '+50%', color: 'orange' },
-    { id: 'heavy',     label: 'Heavily Damaged',       desc: 'Significantly damaged, hard to resell',      factor: 0.80, badge: '+80%', color: 'red'    },
-    { id: 'destroyed', label: 'Destroyed / Unusable',  desc: 'Packaging completely destroyed, item exposed', factor: 1.00, badge: '+100%', color: 'red'  },
+    { id: 'sealed',    label: 'Sealed / Unopened',    desc: 'Original seal intact, never opened',         factor: 0.05, color: 'green'  },
+    { id: 'intact',    label: 'Intact / Good',        desc: 'Opened but packaging fully undamaged',       factor: 0.50, color: 'green'  },
+    { id: 'minor',     label: 'Minor Damage',          desc: 'Small dents, scuffs or torn edges',          factor: 0.65, color: 'amber'  },
+    { id: 'moderate',  label: 'Moderate Damage',       desc: 'Visible damage, partially compromised',      factor: 0.80, color: 'orange' },
+    { id: 'heavy',     label: 'Heavily Damaged',       desc: 'Significantly damaged, hard to resell',      factor: 0.95, color: 'red'    },
+    { id: 'destroyed', label: 'Destroyed / Unusable',  desc: 'Packaging completely destroyed, item exposed', factor: 1.00, color: 'red'  },
   ];
-
-  // ── Return reason — free text + AI suggestion ──────────────────────────────
-  let returnReasonText    = '';       // typed by agent, or accepted from AI
-  let aiSuggestLoading    = false;
-  let aiSuggestedText     = '';       // AI-proposed text, shown in banner
 
   // ── Enquiry fields ────────────────────────────────────────────────────────
   let enquirySubject      = '';
@@ -88,7 +84,6 @@
       vmMediaRecorder.onstop = () => {
         vmAudioBlob = new Blob(vmAudioChunks, { type: 'audio/webm' });
         vmAudioUrl  = URL.createObjectURL(vmAudioBlob);
-        // Stop all tracks so mic indicator goes away
         stream.getTracks().forEach(t => t.stop());
       };
       vmMediaRecorder.start();
@@ -148,30 +143,7 @@
       senderName: 'Sarah Thompson',
       senderEmail: 'sarah.t@gmail.com',
       subject: 'My order hasn\'t arrived — tracking stuck for 3 days',
-      body: `Hi,
-
-I placed order #WM-8821 six days ago and I still haven't received it. The tracking page hasn't updated in 3 days and just says "In Transit".
-
-Could someone please look into this urgently? I needed this item by the weekend.
-
-Thank you,
-Sarah Thompson`,
-    },
-    {
-      label: 'Billing Double Charge',
-      senderType: 'customer',
-      senderName: 'Jennifer Walsh',
-      senderEmail: 'j.walsh@hotmail.com',
-      subject: 'Duplicate charge on my account — need immediate refund',
-      body: `Hello,
-
-I was charged $149.99 twice for my subscription renewal on March 10th. I only authorised one payment. My bank statement clearly shows two identical transactions.
-
-Please refund the duplicate charge as soon as possible.
-
-Regards,
-Jennifer Walsh
-Account: jennifer.w@hotmail.com`,
+      body: `Hi,\n\nI placed order #WM-8821 six days ago and I still haven't received it. The tracking page hasn't updated in 3 days and just says "In Transit".\n\nCould someone please look into this urgently? I needed this item by the weekend.\n\nThank you,\nSarah Thompson`,
     },
     {
       label: 'Wrong Item Delivered',
@@ -179,73 +151,8 @@ Account: jennifer.w@hotmail.com`,
       senderName: 'Marcus Reid',
       senderEmail: 'marcusreid22@gmail.com',
       subject: 'Received wrong product — Order #WM-9034',
-      body: `Hi there,
-
-I ordered a Blue 12-Cup Coffee Maker (Model CM-200) but received a Red 8-Cup version instead. This was meant as a birthday gift and I'm very disappointed.
-
-Order #WM-9034 — placed on March 8th.
-
-I'd like either the correct item sent to me or a full refund. Please advise on next steps.
-
-Thanks,
-Marcus`,
-    },
-    {
-      label: 'Seller — Product Delisted',
-      senderType: 'seller',
-      senderName: 'TechGadget Supplies',
-      senderEmail: 'ops@techgadgetsupplies.com',
-      subject: 'Product listings removed without notice — urgent reinstatement needed',
-      body: `Dear Support Team,
-
-This is the operations team at TechGadget Supplies. Three of our active product listings have been removed without any notification or explanation.
-
-Affected Product IDs: TG-441, TG-445, TG-502
-
-These listings were compliant with all marketplace guidelines. We are losing significant daily revenue and need this escalated urgently.
-
-Please advise on why they were removed and provide a timeline for reinstatement.
-
-Best regards,
-David Chen
-Operations Manager — TechGadget Supplies`,
-    },
-    {
-      label: 'Seller — Payout Delay',
-      senderType: 'seller',
-      senderName: 'Sunrise Electronics',
-      senderEmail: 'accounts@sunriseelectronics.co',
-      subject: 'February seller payout still not received — $3,420 outstanding',
-      body: `Dear Accounts Team,
-
-My seller payout for February has not been processed. The expected settlement date was February 28th and it is now March 13th — two weeks overdue.
-
-Outstanding amount: $3,420.00
-Seller Account ID: SE-00482
-
-I have raised this through the portal twice with no response. Please treat this as urgent.
-
-Regards,
-David Chen
-Sunrise Electronics`,
-    },
-    {
-      label: 'Promo Code Not Applied',
-      senderType: 'customer',
-      senderName: 'Priya Nair',
-      senderEmail: 'priya.nair@outlook.com',
-      subject: 'Promo code SAVE20 not applied to my order',
-      body: `Hi,
-
-I used promo code SAVE20 at checkout on March 11th but my final order total wasn't reduced. I was charged the full price of $89.99 instead of the expected $71.99.
-
-Order confirmation number: #WM-9187
-
-Can you please apply the discount retroactively or issue a partial refund of $18.00?
-
-Thank you,
-Priya`,
-    },
+      body: `Hi there,\n\nI ordered a Blue 12-Cup Coffee Maker (Model CM-200) but received a Red 8-Cup version instead. This was meant as a birthday gift and I'm very disappointed.\n\nOrder #WM-9034 — placed on March 8th.\n\nI'd like either the correct item sent to me or a full refund. Please advise on next steps.\n\nThanks,\nMarcus`,
+    }
   ];
 
   function applySample(s) {
@@ -256,23 +163,12 @@ Priya`,
     enquiryRawMessage  = s.body;
   }
 
-  const ENQUIRY_CATEGORIES = [
-    { id: 'order_status',   label: 'Order Status',       icon: '📦' },
-    { id: 'billing',        label: 'Billing & Payments', icon: '💳' },
-    { id: 'product_info',   label: 'Product Info',       icon: 'ℹ'  },
-    { id: 'delivery',       label: 'Delivery',           icon: '🚚' },
-    { id: 'account',        label: 'Account',            icon: '👤' },
-    { id: 'promo_discount', label: 'Promo / Discount',   icon: '🏷' },
-    { id: 'technical',      label: 'Technical Support',  icon: '🔧' },
-    { id: 'other',          label: 'Other',              icon: '💬' },
-  ];
-
   // ── Financials ────────────────────────────────────────────────────────────
   let returnAmt       = '';
   let netLoss         = '';
-  let returnAmtEdited = false;  // true once agent manually overrides
-  let netLossEdited   = false;  // true once agent manually overrides
-  let priority  = 'medium';
+  let returnAmtEdited = false;
+  let netLossEdited   = false;
+  let priority        = 'medium';
 
   // ── Static option sets ────────────────────────────────────────────────────
   const CHANNELS = [
@@ -291,13 +187,12 @@ Priya`,
   $: stepLabels = ticketType === 'enquiry'
     ? [{ n: 1, label: 'Enquiry Details' }]
     : [
-        { n: 1, label: 'Customer & Details' },
+        { n: 1, label: 'Customer Lookup' },
         { n: 2, label: 'Item & Assessment' },
         { n: 3, label: 'Financials & Submit' },
       ];
 
   // ── Derived ───────────────────────────────────────────────────────────────
-  $: reasonText = returnReasonText;  // alias used in review + payload
   $: packagingMeta     = PACKAGING_CONDITIONS.find(p => p.id === packagingCondition);
   $: packagingFactor   = packagingMeta?.factor ?? 0;
 
@@ -306,26 +201,27 @@ Priya`,
     returnAmt = (parseFloat(itemDetails.price) * returnQty).toFixed(2);
   }
 
-  // Net loss: auto-calc from returnAmt × 0.4 × packaging factor unless overridden
+  // Net loss: direct percentage calculation based on factor
   $: if (!netLossEdited && returnAmt && parseFloat(returnAmt) > 0) {
-    netLoss = (parseFloat(returnAmt) * 0.4 * (1 + packagingFactor)).toFixed(2);
+    netLoss = (parseFloat(returnAmt) * packagingFactor).toFixed(2);
   }
-
-  // Net loss preview shown on step 2 (uses item price as proxy before returnAmt is entered)
-  $: netLossPreview = itemDetails
-    ? (parseFloat(itemDetails.price) * returnQty * 0.4 * (1 + packagingFactor)).toFixed(2)
-    : null;
 
   $: step1Valid = ticketType === 'enquiry'
     ? (enquiryRawMessage.trim())
-    : (lookupStatus !== '' && custName.trim() && complaintDesc.trim());
-  $: step2Valid = itemLookupStatus === 'found' && returnReasonText.trim() && packagingCondition;
-  // returnAmt is auto-populated so step 3 is always valid for returns once item exists
+    : (lookupStatus !== '' && custName.trim());
+    
+  // Only allow proceeding if the user selected a package condition
+  $: step2Valid = itemLookupStatus === 'found' && packagingCondition;
+  
   $: step3Valid = ticketType === 'return'
     ? (!!itemDetails && returnAmt !== '')
     : true;
 
-  // ── No onMount data fetch needed for reasons ────────────────────────────────
+  // Reset assessment complete flag if package condition changes
+  $: if (packagingCondition) {
+    assessmentComplete = false;
+    assessmentError = '';
+  }
 
   // ── Customer lookup ───────────────────────────────────────────────────────
   async function lookupCustomer() {
@@ -369,65 +265,53 @@ Priya`,
   }
   function clearItem() {
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null;
-    packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
+    packagingCondition = '';
+    assessmentComplete = false;
   }
 
-  // ── AI Suggest Reason ─────────────────────────────────────────────────────
-  async function suggestReason() {
-    if (!complaintDesc.trim() && !packagingCondition) return;
-    aiSuggestLoading = true; aiSuggestedText = '';
+  // ── Assess Item Return ────────────────────────────────────────────────────
+  async function handleAssessReturn() {
+    if (!itemDetails || !packagingCondition) return;
+    assessmentLoading = true;
+    assessmentError = '';
+    assessmentComplete = false;
+
     try {
-      const res = await fetch(`${FASTAPI}/api/suggest-reason`, {
+      const payload = {
+        item_sk: itemDetails.sk,
+        price: itemDetails.price,
+        return_qty: returnQty,
+        packaging_condition: packagingCondition,
+        factor: packagingFactor
+      };
+
+      const res = await fetch(`${FASTAPI}/api/access_item_return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // complaint
-          complaint_desc:       complaintDesc,
-          // packaging
-          packaging_condition:  packagingCondition,
-          packaging_factor:     packagingFactor,
-          // full item details
-          item_name:            itemDetails?.name          ?? '',
-          item_brand:           itemDetails?.brand         ?? '',
-          item_category:        itemDetails?.category      ?? '',
-          item_category_full:   itemDetails?.category_full ?? '',
-          item_class:           itemDetails?.cls           ?? '',
-          item_price:           itemDetails?.price         ?? '',
-          item_list_price:      itemDetails?.list_price    ?? '',
-          item_desc:            itemDetails?.desc          ?? '',
-          item_package_size:    itemDetails?.package_size  ?? '',
-          // return financials
-          return_qty:           returnQty,
-          return_amt:           returnAmt,
-          net_loss:             netLoss,
-        }),
+        body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const data = await res.json();
-      aiSuggestedText = data.reason_desc ?? data.reason_text ?? '';
-    } catch {
-      // Client-side fallback — produce a plain text suggestion
-      aiSuggestedText = _clientSideSuggest();
-    } finally { aiSuggestLoading = false; }
-  }
+      if (!res.ok) throw new Error(data.message ?? `HTTP Error ${res.status}`);
+      
+      // Mark as complete so user can proceed visually or see success
+      assessmentComplete = true;
 
-  function _clientSideSuggest() {
-    const d = complaintDesc.toLowerCase();
-    const p = packagingCondition;
-    if (p === 'destroyed' || p === 'heavy')                       return 'Package was heavily damaged on arrival — item exposed and potentially unusable.';
-    if (p === 'moderate')                                         return 'Packaging shows significant damage, compromising product integrity.';
-    if (p === 'minor')                                            return 'Minor packaging damage observed; product may have minor cosmetic issues.';
-    if (d.includes('not working') || d.includes('stopped'))      return 'Product stopped working after a short period of use.';
-    if (d.includes('late') || d.includes('delay'))               return 'Item did not arrive on time; delivery was significantly delayed.';
-    if (d.includes('wrong') || d.includes('not what'))           return 'Received the wrong product — does not match what was ordered.';
-    if (d.includes('missing') || d.includes('parts'))            return 'Parts or accessories were missing from the package.';
-    if (d.includes('defect') || d.includes('broken'))            return 'Product arrived in a defective or broken condition.';
-    return 'Customer is unsatisfied with the product and is requesting a return.';
-  }
+      // Optional: Update financial values if the API returns overridden amounts
+      if (data.returnAmt !== undefined) {
+          returnAmt = data.returnAmt;
+          returnAmtEdited = true;
+      }
+      if (data.netLoss !== undefined) {
+          netLoss = data.netLoss;
+          netLossEdited = true;
+      }
 
-  function acceptAiSuggestion() {
-    returnReasonText = aiSuggestedText;
-    aiSuggestedText  = '';
+    } catch (e) {
+      assessmentError = e.message;
+    } finally {
+      assessmentLoading = false;
+    }
   }
 
   // ── Navigation ────────────────────────────────────────────────────────────
@@ -436,7 +320,7 @@ Priya`,
   function setTicketType(t) {
     ticketType = t; step = 1;
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null;
-    packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
+    packagingCondition = ''; assessmentComplete = false;
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = '';
@@ -448,8 +332,7 @@ Priya`,
     const payload = {
       ticketType,
       customer: { name: custName.trim(), email: custEmail.trim() || lookupEmail.trim(), tier: custTier, sk: custSk },
-      channel, priority,
-      complaintDesc: complaintDesc.trim(),   // original customer complaint notes
+      channel: 'email', priority,
       packagingCondition,
       packagingFactor,
       ...(ticketType === 'return' ? {
@@ -463,7 +346,6 @@ Priya`,
           price:     itemDetails?.price,
           returnQty,
         },
-        reasonDesc: returnReasonText.trim() || complaintDesc.trim(),
         returnAmt:  parseFloat(returnAmt) || 0,
         netLoss:    parseFloat(netLoss)   || 0,
       } : {
@@ -494,7 +376,7 @@ Priya`,
     lookupEmail = ''; lookupStatus = ''; custName = ''; custEmail = '';
     custTier = 'Bronze'; custSk = null; channel = 'email'; complaintDesc = '';
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null; returnQty = 1;
-    packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
+    packagingCondition = ''; assessmentComplete = false;
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
@@ -525,7 +407,7 @@ Priya`,
         <div class="success-id">{createdTicketId}</div>
         <p class="success-detail">
           {ticketType === 'return' ? 'Return ticket' : 'Enquiry ticket'} for <strong>{custName}</strong> has been created.
-          {#if ticketType === 'return'}<br/>Reason: <strong>{reasonText}</strong>{:else}<br/>Subject: <strong>{enquirySubject}</strong>{/if}
+          {#if ticketType === 'return'}<br/>{:else}<br/>Subject: <strong>{enquirySubject}</strong>{/if}
           <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
         </p>
         <div class="success-actions">
@@ -536,7 +418,6 @@ Priya`,
 
     {:else}
 
-      <!-- Ticket type toggle -->
       <div class="type-selector">
         <button class="type-btn" class:active={ticketType === 'return'} on:click={() => setTicketType('return')}>
           <span class="type-icon">↩</span>
@@ -550,7 +431,6 @@ Priya`,
         </button>
       </div>
 
-      <!-- Step bar -->
       <div class="step-bar">
         {#each stepLabels as s}
           <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
@@ -563,13 +443,9 @@ Priya`,
 
       <div class="form-container">
 
-        <!-- ═══ STEP 1 ═══ -->
         {#if step === 1}
 
           {#if ticketType === 'enquiry'}
-            <!-- ═══ ENQUIRY: single-step form + direct submit ═══ -->
-
-            <!-- Input mode selector -->
             <div class="form-section">
               <div class="section-title">Input Mode</div>
               <div class="input-mode-tabs">
@@ -577,7 +453,7 @@ Priya`,
                   <span class="mode-tab-icon">✉</span>
                   <div class="mode-tab-body">
                     <span class="mode-tab-label">Email / Text Message</span>
-                    <span class="mode-tab-desc">Paste or type the customer’s email, live chat or any written message</span>
+                    <span class="mode-tab-desc">Paste or type the customer's email, live chat or any written message</span>
                   </div>
                 </button>
                 <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
@@ -590,7 +466,6 @@ Priya`,
               </div>
             </div>
 
-            <!-- Demo samples -->
             <div class="form-section">
               <div class="section-title">Load a Demo Sample <span class="section-sub">— click any to populate the form</span></div>
               <div class="sample-grid">
@@ -607,11 +482,9 @@ Priya`,
             </div>
 
             {#if enquiryInputMode === 'voicemail'}
-              <!-- ─── VOICEMAIL RECORDER ─── -->
               <div class="form-section vm-section">
                 <div class="section-title">Voicemail Recorder</div>
 
-                <!-- Idle: show record button -->
                 {#if !vmRecording && !vmAudioBlob}
                   <div class="vm-idle">
                     <button class="vm-record-btn" on:click={startRecording}>
@@ -622,7 +495,6 @@ Priya`,
                   </div>
                 {/if}
 
-                <!-- Recording in progress -->
                 {#if vmRecording}
                   <div class="vm-recording">
                     <div class="vm-pulse-ring">
@@ -636,14 +508,12 @@ Priya`,
                   </div>
                 {/if}
 
-                <!-- Recording done — preview + actions -->
                 {#if vmAudioBlob && !vmRecording}
                   <div class="vm-preview">
                     <div class="vm-preview-header">
                       <span class="vm-preview-label">✔ Recording captured</span>
                       <span class="vm-preview-duration">{vmFormatDuration(vmDuration)}</span>
                     </div>
-                    <!-- svelte-ignore a11y-media-has-caption -->
                     <audio src={vmAudioUrl} controls class="vm-audio-player"></audio>
                     <div class="vm-actions">
                       {#if enquiryRawMessage}
@@ -672,7 +542,6 @@ Priya`,
                 {/if}
               </div>
 
-              <!-- Transcript result (editable) -->
               {#if enquiryRawMessage}
                 <div class="form-section">
                   <div class="section-title-row">
@@ -697,7 +566,6 @@ Priya`,
             </div>
 
           {:else}
-            <!-- ═══ RETURN: customer lookup step ═══ -->
             <div class="form-section">
               <div class="section-title">Customer Lookup</div>
               <div class="lookup-row">
@@ -724,7 +592,7 @@ Priya`,
               {:else if lookupStatus === 'not_found'}
                 <div class="lookup-banner lookup-new">
                   <span class="banner-icon">＋</span>
-                  <div class="banner-body"><strong>No existing customer found</strong><span class="banner-sub">Enter the customer’s name below to continue</span></div>
+                  <div class="banner-body"><strong>No existing customer found</strong><span class="banner-sub">Enter the customer's name below to continue</span></div>
                 </div>
               {:else if lookupStatus === 'error'}
                 <div class="lookup-banner lookup-error">
@@ -744,25 +612,6 @@ Priya`,
               {/if}
             </div>
 
-            {#if lookupStatus !== ''}
-              <div class="form-section">
-                <div class="section-title">Contact Channel</div>
-                <div class="chip-group">
-                  {#each CHANNELS as ch}
-                    <button class="chip" class:selected={channel === ch.id} on:click={() => channel = ch.id}>
-                      <span class="chip-icon">{ch.icon}</span>{ch.label}
-                    </button>
-                  {/each}
-                </div>
-              </div>
-              <div class="form-section">
-                <div class="section-title">Complaint Description <span class="req">*</span></div>
-                <textarea bind:value={complaintDesc} rows="5"
-                  placeholder="Describe the customer’s complaint in detail. E.g.: ‘Customer received a damaged laptop — screen cracked on arrival. Wants replacement or full refund…’"
-                ></textarea>
-              </div>
-            {/if}
-
             <div class="step-actions">
               <div></div>
               <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>Next: Item & Assessment →</button>
@@ -770,12 +619,10 @@ Priya`,
           {/if}
 
 
-        <!-- ═══ STEP 2A: Item & Assessment (Return) ═══ -->
         {:else if step === 2 && ticketType === 'return'}
 
-          <!-- Item Lookup -->
           <div class="form-section">
-            <div class="section-title">Item Lookup <span class="section-sub">by Item SK</span></div>
+            <div class="section-title">Item To Return<span class="section-sub">by Item SK</span></div>
             <div class="lookup-row">
               <div class="lookup-input-wrap">
                 <input type="number" bind:value={itemLookupSk}
@@ -803,7 +650,6 @@ Priya`,
               </div>
             {/if}
 
-            <!-- Item details card — auto-filled -->
             {#if itemDetails}
               <div class="item-card">
                 <div class="item-card-header">
@@ -845,7 +691,6 @@ Priya`,
                 {#if itemDetails.desc}
                   <div class="item-desc">{truncate(itemDetails.desc, 220)}</div>
                 {/if}
-                <!-- Quantity -->
                 <div class="qty-row">
                   <label class="qty-label">Return Quantity</label>
                   <div class="qty-controls">
@@ -859,7 +704,6 @@ Priya`,
             {/if}
           </div>
 
-          <!-- Package Assessment -->
           <div class="form-section" class:section-locked={!itemDetails}>
             <div class="section-title">
               Package Condition Assessment <span class="req">*</span>
@@ -876,75 +720,32 @@ Priya`,
                 >
                   <div class="pkg-card-top">
                     <span class="pkg-label">{cond.label}</span>
-                    <span class="pkg-badge pkg-badge-{cond.color}">{cond.badge}</span>
                   </div>
                   <span class="pkg-desc">{cond.desc}</span>
                 </button>
               {/each}
             </div>
 
-            <!-- Net loss preview -->
             {#if packagingCondition && itemDetails}
-              <div class="net-loss-preview">
-                <span class="nlp-label">Estimated Net Loss Formula</span>
-                <div class="nlp-formula">
-                  <span class="nlp-part">Return Amt</span>
-                  <span class="nlp-op">×</span>
-                  <span class="nlp-part">0.4 (base rate)</span>
-                  <span class="nlp-op">×</span>
-                  <span class="nlp-part pkg-mult">(1 + {packagingFactor}) = {(1 + packagingFactor).toFixed(2)}×</span>
-                  <span class="nlp-op">=</span>
-                  <span class="nlp-result">${netLossPreview} <span class="nlp-note">at list price</span></span>
-                </div>
-              </div>
-            {/if}
-          </div>
-
-          <!-- Return Reason + AI Suggest -->
-          <div class="form-section" class:section-locked={!packagingCondition}>
-            <div class="section-title-row">
-              <div class="section-title">
-                Return / Complaint Reason <span class="req">*</span>
-                {#if !packagingCondition}<span class="lock-hint">— assess packaging first</span>{/if}
-              </div>
-              {#if packagingCondition && complaintDesc.trim()}
-                <button class="btn-ai-suggest" on:click={suggestReason} disabled={aiSuggestLoading}>
-                  {#if aiSuggestLoading}
-                    <span class="spinner-sm"></span> Analysing…
+              <div class="assessment-action mt-12">
+                <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={assessmentLoading}>
+                  {#if assessmentLoading}
+                    <span class="spinner-sm"></span> Assessing...
                   {:else}
-                    ✦ AI Suggest Reason
+                    ✦ Assess Return
                   {/if}
                 </button>
-              {/if}
-            </div>
-
-            <!-- AI suggestion banner -->
-            {#if aiSuggestedText}
-              <div class="ai-suggestion">
-                <div class="ai-suggestion-left">
-                  <span class="ai-badge">✦ AI</span>
-                  <div class="ai-suggestion-text">
-                    <strong>Suggested reason based on complaint & packaging:</strong>
-                    <span>{aiSuggestedText}</span>
+                {#if assessmentError}
+                  <div class="error-banner mt-12">⚠ {assessmentError}</div>
+                {/if}
+                {#if assessmentComplete && !assessmentError}
+                  <div class="assessment-success">
+                    <span class="banner-icon">✓</span> Assessment logged successfully.
                   </div>
-                </div>
-                <div class="ai-suggestion-actions">
-                  <button class="btn-accept" on:click={acceptAiSuggestion}>Accept</button>
-                  <button class="btn-dismiss" on:click={() => aiSuggestedText = ''}>✕</button>
-                </div>
+                {/if}
               </div>
             {/if}
 
-            <!-- Manual reason entry -->
-            <textarea
-              bind:value={returnReasonText}
-              rows="3"
-              placeholder="Describe the return reason in your own words. E.g.: 'Product arrived with a cracked screen — packaging was heavily damaged in transit. Customer wants a full replacement…'"
-              disabled={!packagingCondition}
-            ></textarea>
-            {#if returnReasonText.trim()}
-              <div class="reason-char-count">{returnReasonText.length} characters</div>
-            {/if}
           </div>
 
           <div class="step-actions">
@@ -953,10 +754,8 @@ Priya`,
           </div>
 
 
-        <!-- ═══ STEP 2B: Enquiry Details ═══ -->
         {:else if step === 2 && ticketType === 'enquiry'}
 
-          <!-- Input mode selector -->
           <div class="form-section">
             <div class="section-title">Input Mode</div>
             <div class="input-mode-tabs">
@@ -977,7 +776,6 @@ Priya`,
             </div>
           </div>
 
-        <!-- ═══ STEP 3A: Financials (Return) ═══ -->
         {:else if step === 3 && ticketType === 'return'}
 
           <div class="form-section">
@@ -1002,7 +800,7 @@ Priya`,
                 <label>
                   Net Loss ($)
                   {#if !netLossEdited}
-                    <span class="field-note">auto — {packagingMeta?.badge ?? '0%'} packaging</span>
+                    <span class="field-note">auto calculated</span>
                   {:else}
                     <button class="btn-reset" on:click={() => netLossEdited = false}>↺ reset</button>
                   {/if}
@@ -1014,14 +812,13 @@ Priya`,
                 />
               </div>
             </div>
-            <!-- Live formula bar -->
             <div class="formula-bar">
               <span class="fb-label">Formula:</span>
               <span class="fb-eq">
                 ${parseFloat(itemDetails?.price ?? 0).toFixed(2)} × {returnQty}
                 <span class="fb-op">=</span> ${returnAmt}
-                <span class="fb-op">× 0.4 ×</span>
-                {(1 + packagingFactor).toFixed(2)}
+                <span class="fb-op">×</span>
+                {Math.round(packagingFactor * 100)}%
                 <span class="fb-op">=</span>
                 <strong>${netLoss || '—'}</strong>
               </span>
@@ -1039,7 +836,6 @@ Priya`,
             </div>
           </div>
 
-          <!-- Review -->
           <div class="form-section review-section">
             <div class="section-title">Review Summary</div>
             <div class="review-grid">
@@ -1047,15 +843,11 @@ Priya`,
               <div class="review-item"><span class="review-label">Channel</span><span class="review-val">{CHANNELS.find(c => c.id === channel)?.icon} {CHANNELS.find(c => c.id === channel)?.label}</span></div>
               <div class="review-item"><span class="review-label">Item</span><span class="review-val">{truncate(itemDetails?.name ?? '', 40)}</span></div>
               <div class="review-item"><span class="review-label">Qty</span><span class="review-val">{returnQty}</span></div>
-              <div class="review-item"><span class="review-label">Reason</span><span class="review-val">{returnReasonText}</span></div>
               <div class="review-item"><span class="review-label">Packaging</span><span class="review-val">{packagingMeta?.label ?? '—'}</span></div>
               <div class="review-item"><span class="review-label">Return Amount</span><span class="review-val amt">${parseFloat(returnAmt || 0).toFixed(2)}</span></div>
               <div class="review-item"><span class="review-label">Net Loss</span><span class="review-val loss">${parseFloat(netLoss || 0).toFixed(2)}</span></div>
             </div>
-            <div class="review-complaint">
-              <span class="review-label">Complaint Notes</span>
-              <p>{complaintDesc}</p>
-            </div>
+
           </div>
 
           {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
@@ -1066,7 +858,6 @@ Priya`,
               {#if submitting}<span class="spinner-sm"></span> Creating…{:else}✦ Create Return Ticket{/if}
             </button>
           </div>
-
 
         {/if}
 
@@ -1182,12 +973,6 @@ Priya`,
   .pkg-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .pkg-label { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
   .pkg-desc  { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
-  .pkg-badge { font-family: var(--font-mono); font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
-
-  .pkg-badge-green  { color: var(--green);  background: var(--green-dim); }
-  .pkg-badge-amber  { color: var(--amber);  background: var(--amber-glow); }
-  .pkg-badge-orange { color: var(--orange); background: var(--orange-dim); }
-  .pkg-badge-red    { color: var(--red);    background: var(--red-dim); }
 
   .pkg-card.pkg-green.selected  { border-color: rgba(76,175,130,0.5);  background: var(--green-dim); }
   .pkg-card.pkg-amber.selected  { border-color: rgba(212,168,67,0.5);  background: var(--amber-glow); }
@@ -1198,16 +983,11 @@ Priya`,
   .pkg-card.pkg-orange.selected .pkg-label { color: var(--orange); }
   .pkg-card.pkg-red.selected    .pkg-label { color: var(--red); }
 
-  /* Net loss preview */
-  .net-loss-preview { margin-top: 14px; padding: 12px 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 6px; }
-  .nlp-label   { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono); }
-  .nlp-formula { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .nlp-part    { font-size: 12.5px; color: var(--text-secondary); background: var(--bg-surface); padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); }
-  .nlp-part.pkg-mult { color: var(--amber); border-color: rgba(212,168,67,0.3); background: var(--amber-glow); }
-  .nlp-op      { font-size: 13px; color: var(--text-muted); font-family: var(--font-mono); }
-  .nlp-result  { font-size: 14px; font-weight: 700; color: var(--red); font-family: var(--font-mono); }
-  .nlp-note    { font-size: 10px; color: var(--text-muted); font-weight: 400; margin-left: 4px; }
-
+  /* Assessment */
+  .assessment-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .btn-assess { align-self: flex-start; }
+  .assessment-success { font-size: 12px; color: var(--green); display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
+  
   /* Reason grid */
   .reason-char-count { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-align: right; margin-top: 4px; }
 

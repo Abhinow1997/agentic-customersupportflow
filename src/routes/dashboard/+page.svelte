@@ -1,13 +1,13 @@
 <script>
-  import { onMount } from 'svelte';
   import {
     filters, selectedTicketId, selectedTicket,
     tickets, ticketsLoading, ticketsError,
-    loadTickets, updateTicketStatus, analyzeTicket
+    loadTickets, updateTicketStatus
   } from '$lib/stores.js';
 
-  // ── Filter tab ──────────────────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────────────────
   let activeTab = 'Open';
+  let ticketsQueued = false;
 
   $: filteredTickets = $tickets.filter(t => {
     if (activeTab !== 'All' && t.status !== activeTab) return false;
@@ -32,9 +32,15 @@
   $: totalAmt     = $tickets.reduce((s, t) => s + (parseFloat(t.returnAmt) || 0), 0);
   $: totalNetLoss = $tickets.reduce((s, t) => s + (parseFloat(t.netLoss)   || 0), 0);
 
-  onMount(() => { loadTickets(); });
+  // ── Handlers ────────────────────────────────────────────────────────────────
+  async function handleQueueTickets() {
+    await loadTickets();
+    ticketsQueued = true;
+  }
 
-  function selectTicket(id) { selectedTicketId.set(id); }
+  function selectTicket(id) { 
+    selectedTicketId.set(id); 
+  }
 
   function formatDate(dateStr) {
     if (!dateStr) return '—';
@@ -46,7 +52,9 @@
     return isNaN(n) ? '—' : `$${n.toFixed(2)}`;
   }
 
-  function setSearch(e) { filters.update(f => ({ ...f, search: e.target.value })); }
+  function setSearch(e) { 
+    filters.update(f => ({ ...f, search: e.target.value })); 
+  }
 
   // ── Resolution options ──────────────────────────────────────────────────
   const RESOLUTION_OPTIONS = [
@@ -62,8 +70,7 @@
   function resolutionColor(id) { return RESOLUTION_OPTIONS.find(o => o.id === id)?.color ?? 'amber'; }
   function resolutionIcon(id)  { return RESOLUTION_OPTIONS.find(o => o.id === id)?.icon  ?? '—'; }
 
-  // Detect and parse the structured SR_RESOLUTION string written by the create endpoint.
-  // Format: "ITEM: ... | UNIT PRICE: ... | PACKAGING ASSESSMENT: ... | FINANCIALS: ... | RETURN REASON: ... | AGENT NOTES: ..."
+  // Parse structured resolution
   function isStructuredResolution(str) {
     return typeof str === 'string' && str.startsWith('ITEM:');
   }
@@ -83,14 +90,10 @@
   }
 
   // ── UI state machine ──────────────────────────────────────────────────────
-  // stages: 'idle' | 'manual_selecting' | 'manual_selected' | 'ai_loading' | 'ai_shown' | 'confirmed'
+  // stages: 'idle' | 'manual_selecting' | 'manual_selected' | 'confirmed'
   let uiStage            = 'idle';
   let selectedResolution = null;
   let confirmLoading     = false;
-
-  // Live triage result from FastAPI — replaces t.triage in ai_shown stage
-  let aiTriage = null;
-  let aiError  = null;
 
   // Reset all local state when the selected ticket changes
   $: if ($selectedTicket) {
@@ -104,29 +107,12 @@
       uiStage = 'idle';
       selectedResolution = null;
     }
-    aiTriage       = null;
-    aiError        = null;
     confirmLoading = false;
   }
 
   function handleManualClick()         { uiStage = 'manual_selecting'; }
   function handleSelectResolution(opt) { selectedResolution = opt; uiStage = 'manual_selected'; }
   function handleBack()                { uiStage = 'manual_selecting'; selectedResolution = null; }
-
-  async function handleAiAnalyze() {
-    if (!$selectedTicket) return;
-    uiStage  = 'ai_loading';
-    aiTriage = null;
-    aiError  = null;
-    try {
-      const result = await analyzeTicket($selectedTicket);
-      aiTriage = result.triage;   // { action, actionLabel, actionRationale, refundSignal, policyRef, flags, priorityOverride }
-      uiStage  = 'ai_shown';
-    } catch (e) {
-      aiError = e.message;
-      uiStage = 'idle';
-    }
-  }
 
   async function handleConfirm() {
     if (!$selectedTicket) return;
@@ -146,374 +132,335 @@
     </div>
     <div class="topbar-stats">
       <div class="stat-pill">
-        <span class="dot" style="background:{$ticketsLoading ? 'var(--text-muted)' : 'var(--amber)'}"></span>
-        {#if $ticketsLoading}Fetching…{:else}{counts.All} Total{/if}
+        <span class="dot" style="background:var(--blue)"></span>
+        {counts.Open} Open
       </div>
-      <div class="stat-pill"><span class="dot" style="background:var(--blue)"></span>{counts.Open} Open</div>
-      <div class="stat-pill"><span class="dot" style="background:var(--green)"></span>{counts.Closed} Closed</div>
-      <div class="stat-pill"><span class="dot" style="background:var(--red)"></span>Net Loss: ${totalNetLoss.toFixed(0)}</div>
-    </div>
-  </header>
-
-  <div class="split-view">
-    <div class="list-panel">
-      <div class="list-filters">
-        <input class="search-input" type="text" placeholder="Search by customer, category, reason…" value={$filters.search} on:input={setSearch} />
+      <div class="stat-pill">
+        <span class="dot" style="background:var(--green)"></span>
+        {counts.Closed} Closed
       </div>
-
-      <div class="filter-tabs">
-        {#each ['Open', 'Closed', 'All'] as tab}
-          <button class="tab-btn" class:active={activeTab === tab} on:click={() => activeTab = tab}>
-            {tab}<span class="tab-count">{counts[tab]}</span>
-          </button>
-        {/each}
+      <div class="stat-pill">
+        <span class="dot" style="background:var(--amber)"></span>
+        {counts.All} Total
       </div>
-
-      <div class="returns-list">
-        {#if $ticketsLoading}
-          <div class="list-loading"><span class="spinner-sm"></span> Fetching returns…</div>
-        {:else if $ticketsError}
-          <div class="list-banner warn">⚠ {$ticketsError}</div>
-        {/if}
-
-        {#each filteredTickets as t (t.id)}
-          <button class="return-row" class:active={$selectedTicketId === t.id} on:click={() => selectTicket(t.id)}>
-            <div class="row-top">
-              <span class="return-id">{t.id}</span>
-              <span class="row-status-dot status-dot-{(t.status ?? 'Open').toLowerCase()}"></span>
-              <span class="return-date">{formatDate(t.created)}</span>
-            </div>
-            <div class="row-product">{t.item?.name ? (t.item.name.length > 42 ? t.item.name.slice(0,42)+'…' : t.item.name) : t.id}</div>
-            <div class="row-meta">
-              <span class="row-customer">{t.customer?.name ?? '—'}</span>
-              <span class="row-category">{t.item?.category ?? '—'}</span>
-            </div>
-            <div class="row-bottom">
-              {#if isStructuredResolution(t.resolution)}
-                {@const parsed = parseStructuredResolution(t.resolution)}
-                <span class="row-reason">{parsed['RETURN REASON'] ?? parsed['PACKAGING ASSESSMENT'] ?? t.returnReason ?? '—'}</span>
-              {:else}
-                <span class="row-reason">{t.returnReason ?? '—'}</span>
-              {/if}
-              <span class="row-amt">{formatAmt(t.returnAmt)}</span>
-            </div>
-            {#if t.resolution}
-              {#if isStructuredResolution(t.resolution)}
-                <div class="row-resolution row-resolution-manual">✓ Manual Return · {parseStructuredResolution(t.resolution)['PACKAGING ASSESSMENT']?.split('(')[0]?.trim() ?? 'Assessed'}</div>
-              {:else}
-                <div class="row-resolution">✓ {resolutionLabel(t.resolution)}</div>
-              {/if}
-            {/if}
-          </button>
-        {/each}
-
-        {#if !$ticketsLoading && filteredTickets.length === 0}
-          <div class="empty-state">
-            {#if $filters.search}No returns match your search
-            {:else}No {activeTab === 'All' ? '' : activeTab + ' '}returns
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <div class="detail-panel">
-      {#if $selectedTicket}
-        {@const t = $selectedTicket}
-        <div class="detail-content">
-
-          <div class="detail-header">
-            <div class="detail-header-top">
-              <div class="header-ids">
-                <span class="detail-id">{t.id}</span>
-                <span class="status-badge status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
-                {#if isStructuredResolution(t.resolution)}<span class="manual-badge">✎ Manual Entry</span>{/if}
-              </div>
-              <span class="return-date-large">{formatDate(t.created)}</span>
-            </div>
-            <h3 class="detail-title">{t.item?.name ?? t.id}</h3>
-            <div class="detail-reason">
-              {#if isStructuredResolution(t.resolution)}
-                {parseStructuredResolution(t.resolution)['RETURN REASON'] ?? t.returnReason ?? '—'}
-              {:else}
-                {t.returnReason ?? '—'}
-              {/if}
-            </div>
-          </div>
-
-          {#if isStructuredResolution(t.resolution)}
-            {@const ra = parseStructuredResolution(t.resolution)}
-            <div class="detail-section assessment-section">
-              <div class="section-label">✓ Return Assessment <span class="manual-tag">Manual Entry</span></div>
-              <div class="assessment-grid">
-                {#if ra['ITEM']}
-                  <div class="assessment-block full-width">
-                    <span class="ab-label">Product</span>
-                    <span class="ab-val">{ra['ITEM']}</span>
-                  </div>
-                {/if}
-                {#if ra['UNIT PRICE']}
-                  <div class="assessment-block">
-                    <span class="ab-label">Unit Price / Qty / Total</span>
-                    <span class="ab-val mono">{ra['UNIT PRICE']}</span>
-                  </div>
-                {/if}
-                {#if ra['PACKAGING ASSESSMENT']}
-                  <div class="assessment-block">
-                    <span class="ab-label">Packaging Condition</span>
-                    <span class="ab-val pkg">{ra['PACKAGING ASSESSMENT']}</span>
-                  </div>
-                {/if}
-                {#if ra['FINANCIALS']}
-                  <div class="assessment-block full-width">
-                    <span class="ab-label">Financials Breakdown</span>
-                    <span class="ab-val mono">{ra['FINANCIALS']}</span>
-                  </div>
-                {/if}
-                {#if ra['RETURN REASON']}
-                  <div class="assessment-block full-width">
-                    <span class="ab-label">Return Reason (AI Generated)</span>
-                    <span class="ab-val reason-text">{ra['RETURN REASON']}</span>
-                  </div>
-                {/if}
-                {#if ra['AGENT NOTES']}
-                  <div class="assessment-block full-width">
-                    <span class="ab-label">Agent Notes</span>
-                    <span class="ab-val notes-text">{ra['AGENT NOTES']}</span>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {/if}
-
-          <div class="two-col">
-            <div class="detail-section">
-              <div class="section-label">Return Financials</div>
-              <div class="kv-list">
-                <div class="kv-row"><span class="kv-key">Return Amount</span><span class="kv-val amber">{formatAmt(t.returnAmt)}</span></div>
-                <div class="kv-row"><span class="kv-key">Net Loss</span><span class="kv-val red">{formatAmt(t.netLoss)}</span></div>
-                <div class="kv-row"><span class="kv-key">Return Fee</span><span class="kv-val">{formatAmt(t.fee)}</span></div>
-                <div class="kv-row"><span class="kv-key">Qty Returned</span><span class="kv-val">{t.item?.returnQty ?? '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Return Date</span><span class="kv-val">{formatDate(t.created)}</span></div>
-              </div>
-            </div>
-            <div class="detail-section">
-              <div class="section-label">Item Details <span class="sf-tag">✦ Snowflake</span></div>
-              <div class="kv-list">
-                <div class="kv-row"><span class="kv-key">Product</span><span class="kv-val">{t.item?.name ?? '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Brand</span><span class="kv-val">{t.item?.brand || '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.categoryFull || t.item?.category || '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Class</span><span class="kv-val">{t.item?.class ?? '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `${t.item.price}` : '—'}</span></div>
-                <div class="kv-row"><span class="kv-key">Return Reason</span><span class="kv-val">{t.returnReason ?? '—'}</span></div>
-                {#if t.item?.url}<div class="kv-row"><span class="kv-key">Product Page</span><span class="kv-val"><a href={t.item.url} target="_blank" rel="noreferrer" class="item-link">View ↗</a></span></div>{/if}
-              </div>
-            </div>
-          </div>
-
-          <div class="detail-section">
-            <div class="section-label">Customer Details</div>
-            <div class="customer-card">
-              <div class="cust-avatar">{(t.customer?.name ?? 'U').split(' ').map(n => n[0]).join('').slice(0,2)}</div>
-              <div class="cust-body">
-                <div class="cust-row">
-                  <div class="cust-main">
-                    <div class="cust-name">{t.customer?.name ?? '—'}</div>
-                    <div class="cust-tier tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</div>
-                  </div>
-                </div>
-                <div class="cust-contact">
-                  <div class="contact-item">
-                    <span class="contact-icon">✉</span>
-                    <span class="contact-val">{t.customer?.email ?? '—'}</span>
-                  </div>
-                </div>
-                <div class="cust-stats">
-                  <div class="cust-stat"><span class="cust-stat-val">{t.customer?.ltv ?? '—'}</span><span class="cust-stat-label">Est. LTV</span></div>
-                  <div class="cust-stat"><span class="cust-stat-val">{t.customer?.orders ?? '—'}</span><span class="cust-stat-label">Returns</span></div>
-                  <div class="cust-stat"><span class="cust-stat-val tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</span><span class="cust-stat-label">Tier</span></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- ── idle: two entry buttons ── -->
-          {#if uiStage === 'idle'}
-            {#if aiError}
-              <div class="ai-error-banner">⚠ AI analysis failed: {aiError}</div>
-            {/if}
-            <div class="action-bar">
-              <button class="btn-action btn-manual" on:click={handleManualClick}>✎ Manually Resolve</button>
-              <button class="btn-action btn-ai" on:click={handleAiAnalyze}>✦ AI Analyze</button>
-            </div>
-
-          <!-- ── manual_selecting: pick a resolution ── -->
-          {:else if uiStage === 'manual_selecting'}
-            <div class="detail-section resolution-section">
-              <div class="section-label">Select Resolution Action</div>
-              <div class="resolution-grid">
-                {#each RESOLUTION_OPTIONS as opt}
-                  <button class="res-option color-{opt.color}" on:click={() => handleSelectResolution(opt)}>
-                    <span class="res-icon">{opt.icon}</span>
-                    <span class="res-label">{opt.label}</span>
-                    <span class="res-desc">{opt.desc}</span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-
-          <!-- ── ai_loading: spinner while FastAPI responds ── -->
-          {:else if uiStage === 'ai_loading'}
-            <div class="ai-loading-block">
-              <span class="spinner-sm"></span>
-              <span>Running AI triage…</span>
-            </div>
-
-          <!-- ── manual_selected: show choice + triage + confirm ── -->
-          {:else if uiStage === 'manual_selected'}
-            <div class="detail-section resolution-section">
-              <div class="section-label">
-                Selected Resolution
-                <button class="link-btn" on:click={handleBack}>← Change</button>
-              </div>
-              <div class="selected-resolution color-{selectedResolution.color}">
-                <span class="res-icon">{selectedResolution.icon}</span>
-                <div>
-                  <div class="res-label">{selectedResolution.label}</div>
-                  <div class="res-desc">{selectedResolution.desc}</div>
-                </div>
-              </div>
-            </div>
-            {#if aiTriage ?? t.triage}{@const tr = aiTriage ?? t.triage}
-              <div class="detail-section triage-section">
-                <div class="section-label">AI Resolution Recommendation</div>
-                <div class="triage-action action-{tr.action}">
-                  <div class="triage-action-header">
-                    <span class="triage-action-label">{tr.actionLabel}</span>
-                    <span class="triage-action-type">{tr.action.replace(/_/g, ' ')}</span>
-                  </div>
-                  <p class="triage-rationale">{tr.actionRationale}</p>
-                </div>
-                <div class="triage-meta">
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Refund Signal</span>
-                    <span class="triage-meta-badge refund-{tr.refundSignal.type}">{tr.refundSignal.type}</span>
-                    <span class="triage-meta-note">{tr.refundSignal.note}</span>
-                  </div>
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Policy Reference</span>
-                    <span class="triage-meta-note">{tr.policyRef}</span>
-                  </div>
-                </div>
-                {#if tr.flags.length > 0}
-                  <div class="triage-flags">
-                    {#each tr.flags as flag}
-                      <div class="triage-flag flag-{flag.severity}">
-                        <span class="flag-label">{flag.label}</span>
-                        <span class="flag-sev">{flag.severity}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            <div class="action-bar">
-              <button class="btn-action btn-confirm" on:click={handleConfirm} disabled={confirmLoading}>
-                {#if confirmLoading}<span class="spinner-sm"></span> Closing…{:else}✓ Confirm & Close Ticket{/if}
-              </button>
-            </div>
-
-          <!-- ── ai_shown: live FastAPI triage + confirm ── -->
-          {:else if uiStage === 'ai_shown'}
-            {#if aiTriage}{@const tr = aiTriage}
-              <div class="detail-section triage-section">
-                <div class="section-label">AI Resolution Recommendation <span class="ai-tag">✦ LLM</span></div>
-                <div class="triage-action action-{tr.action}">
-                  <div class="triage-action-header">
-                    <span class="triage-action-label">{tr.actionLabel}</span>
-                    <span class="triage-action-type">{tr.action.replace(/_/g, ' ')}</span>
-                  </div>
-                  <p class="triage-rationale">{tr.actionRationale}</p>
-                </div>
-                <div class="triage-meta">
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Refund Signal</span>
-                    <span class="triage-meta-badge refund-{tr.refundSignal.type}">{tr.refundSignal.type}</span>
-                    <span class="triage-meta-note">{tr.refundSignal.note}</span>
-                  </div>
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Policy Reference</span>
-                    <span class="triage-meta-note">{tr.policyRef}</span>
-                  </div>
-                </div>
-                {#if tr.flags.length > 0}
-                  <div class="triage-flags">
-                    {#each tr.flags as flag}
-                      <div class="triage-flag flag-{flag.severity}">
-                        <span class="flag-label">{flag.label}</span>
-                        <span class="flag-sev">{flag.severity}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-            <div class="action-bar">
-              <button class="btn-action btn-confirm" on:click={handleConfirm} disabled={confirmLoading}>
-                {#if confirmLoading}<span class="spinner-sm"></span> Closing…{:else}✓ Confirm & Close Ticket{/if}
-              </button>
-            </div>
-
-          <!-- ── confirmed: persisted closed state ── -->
-          {:else if uiStage === 'confirmed'}
-            {#if t.resolution}
-              <div class="detail-section resolution-section">
-                <div class="section-label">Resolution Applied</div>
-                <div class="selected-resolution color-{resolutionColor(t.resolution)}">
-                  <span class="res-icon">{resolutionIcon(t.resolution)}</span>
-                  <div>
-                    <div class="res-label">{resolutionLabel(t.resolution)}</div>
-                    <div class="res-desc">Persisted to Snowflake · SR_RESOLUTION = '{t.resolution}'</div>
-                  </div>
-                </div>
-              </div>
-            {/if}
-            {#if t.triage}{@const tr = t.triage}
-              <div class="detail-section triage-section">
-                <div class="section-label">Resolution Recommendation (Reference)</div>
-                <div class="triage-action action-{tr.action}">
-                  <div class="triage-action-header">
-                    <span class="triage-action-label">{tr.actionLabel}</span>
-                    <span class="triage-action-type">{tr.action.replace(/_/g, ' ')}</span>
-                  </div>
-                  <p class="triage-rationale">{tr.actionRationale}</p>
-                </div>
-                <div class="triage-meta">
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Refund Signal</span>
-                    <span class="triage-meta-badge refund-{tr.refundSignal.type}">{tr.refundSignal.type}</span>
-                    <span class="triage-meta-note">{tr.refundSignal.note}</span>
-                  </div>
-                  <div class="triage-meta-item">
-                    <span class="triage-meta-label">Policy Reference</span>
-                    <span class="triage-meta-note">{tr.policyRef}</span>
-                  </div>
-                </div>
-              </div>
-            {/if}
-            <div class="closed-banner">✓ Ticket closed and persisted to Snowflake</div>
-          {/if}
-
-        </div>
-      {:else}
-        <div class="detail-empty">
-          <div class="empty-icon">↩</div>
-          <div>Select a return to review</div>
-          <div class="empty-sub">Live from Snowflake · STORE_RETURNS × ITEM × REASON × CUSTOMER</div>
+      {#if ticketsQueued}
+        <div class="stat-pill">
+          <span class="dot" style="background:var(--red)"></span>
+          Net Loss: ${totalNetLoss.toFixed(0)}
         </div>
       {/if}
     </div>
-  </div>
+  </header>
+
+  {#if !ticketsQueued}
+    <!-- ── Initial State: Show Counts & Queue Button ── -->
+    <div class="queue-stage">
+      <div class="queue-container">
+        <div class="queue-header">
+          <h3>Queued Return Tickets</h3>
+          <p>Load tickets from Snowflake to begin operations</p>
+        </div>
+
+        <div class="queue-counts">
+          <div class="count-card">
+            <div class="count-number">{counts.Open}</div>
+            <div class="count-label">Open Tickets</div>
+          </div>
+          <div class="count-card">
+            <div class="count-number">{counts.Closed}</div>
+            <div class="count-label">Closed Tickets</div>
+          </div>
+          <div class="count-card">
+            <div class="count-number">{counts.All}</div>
+            <div class="count-label">Total</div>
+          </div>
+        </div>
+
+        <button 
+          class="btn-queue" 
+          on:click={handleQueueTickets}
+          disabled={$ticketsLoading}
+        >
+          {#if $ticketsLoading}
+            <span class="spinner-sm"></span>
+            Loading tickets…
+          {:else}
+            ↻ Queue Tickets
+          {/if}
+        </button>
+
+        {#if $ticketsError}
+          <div class="queue-error">{$ticketsError}</div>
+        {/if}
+      </div>
+    </div>
+  {:else}
+    <!-- ── Queued State: Show List & Detail ── -->
+    <div class="split-view">
+      <div class="list-panel">
+        <div class="list-filters">
+          <input 
+            class="search-input" 
+            type="text" 
+            placeholder="Search by customer, category, reason…" 
+            value={$filters.search} 
+            on:input={setSearch} 
+          />
+        </div>
+
+        <div class="filter-tabs">
+          {#each ['Open', 'Closed', 'All'] as tab}
+            <button 
+              class="tab-btn" 
+              class:active={activeTab === tab} 
+              on:click={() => activeTab = tab}
+            >
+              {tab}
+              <span class="tab-count">{counts[tab]}</span>
+            </button>
+          {/each}
+        </div>
+
+        <div class="returns-list">
+          {#if $ticketsError}
+            <div class="list-banner warn">⚠ {$ticketsError}</div>
+          {/if}
+
+          {#each filteredTickets as t (t.id)}
+            <button 
+              class="return-row" 
+              class:active={$selectedTicketId === t.id} 
+              on:click={() => selectTicket(t.id)}
+            >
+              <div class="row-top">
+                <span class="return-id">{t.id}</span>
+                <span class="row-status-dot status-dot-{(t.status ?? 'Open').toLowerCase()}"></span>
+                <span class="return-date">{formatDate(t.created)}</span>
+              </div>
+              <div class="row-product">{t.item?.name ? (t.item.name.length > 42 ? t.item.name.slice(0,42)+'…' : t.item.name) : t.id}</div>
+              <div class="row-meta">
+                <span class="row-customer">{t.customer?.name ?? '—'}</span>
+                <span class="row-category">{t.item?.category ?? '—'}</span>
+              </div>
+              <div class="row-bottom">
+                {#if isStructuredResolution(t.resolution)}
+                  {@const parsed = parseStructuredResolution(t.resolution)}
+                  <span class="row-reason">{parsed['RETURN REASON'] ?? parsed['PACKAGING ASSESSMENT'] ?? t.returnReason ?? '—'}</span>
+                {:else}
+                  <span class="row-reason">{t.returnReason ?? '—'}</span>
+                {/if}
+                <span class="row-amt">{formatAmt(t.returnAmt)}</span>
+              </div>
+              {#if t.resolution}
+                {#if isStructuredResolution(t.resolution)}
+                  <div class="row-resolution row-resolution-manual">✓ Manual Return · {parseStructuredResolution(t.resolution)['PACKAGING ASSESSMENT']?.split('(')[0]?.trim() ?? 'Assessed'}</div>
+                {:else}
+                  <div class="row-resolution">✓ {resolutionLabel(t.resolution)}</div>
+                {/if}
+              {/if}
+            </button>
+          {/each}
+
+          {#if filteredTickets.length === 0}
+            <div class="empty-state">
+              {#if $filters.search}No returns match your search
+              {:else}No {activeTab === 'All' ? '' : activeTab + ' '}returns
+              {/if}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <div class="detail-panel">
+        {#if $selectedTicket}
+          {@const t = $selectedTicket}
+          <div class="detail-content">
+
+            <div class="detail-header">
+              <div class="detail-header-top">
+                <div class="header-ids">
+                  <span class="detail-id">{t.id}</span>
+                  <span class="status-badge status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
+                  {#if isStructuredResolution(t.resolution)}<span class="manual-badge">✎ Manual Entry</span>{/if}
+                </div>
+                <span class="return-date-large">{formatDate(t.created)}</span>
+              </div>
+              <h3 class="detail-title">{t.item?.name ?? t.id}</h3>
+              <div class="detail-reason">
+                {#if isStructuredResolution(t.resolution)}
+                  {parseStructuredResolution(t.resolution)['RETURN REASON'] ?? t.returnReason ?? '—'}
+                {:else}
+                  {t.returnReason ?? '—'}
+                {/if}
+              </div>
+            </div>
+
+            {#if isStructuredResolution(t.resolution)}
+              {@const ra = parseStructuredResolution(t.resolution)}
+              <div class="detail-section assessment-section">
+                <div class="section-label">✓ Return Assessment <span class="manual-tag">Manual Entry</span></div>
+                <div class="assessment-grid">
+                  {#if ra['ITEM']}
+                    <div class="assessment-block full-width">
+                      <span class="ab-label">Product</span>
+                      <span class="ab-val">{ra['ITEM']}</span>
+                    </div>
+                  {/if}
+                  {#if ra['UNIT PRICE']}
+                    <div class="assessment-block">
+                      <span class="ab-label">Unit Price / Qty / Total</span>
+                      <span class="ab-val mono">{ra['UNIT PRICE']}</span>
+                    </div>
+                  {/if}
+                  {#if ra['PACKAGING ASSESSMENT']}
+                    <div class="assessment-block">
+                      <span class="ab-label">Packaging Condition</span>
+                      <span class="ab-val pkg">{ra['PACKAGING ASSESSMENT']}</span>
+                    </div>
+                  {/if}
+                  {#if ra['FINANCIALS']}
+                    <div class="assessment-block full-width">
+                      <span class="ab-label">Financials Breakdown</span>
+                      <span class="ab-val mono">{ra['FINANCIALS']}</span>
+                    </div>
+                  {/if}
+                  {#if ra['RETURN REASON']}
+                    <div class="assessment-block full-width">
+                      <span class="ab-label">Return Reason (AI Generated)</span>
+                      <span class="ab-val reason-text">{ra['RETURN REASON']}</span>
+                    </div>
+                  {/if}
+                  {#if ra['AGENT NOTES']}
+                    <div class="assessment-block full-width">
+                      <span class="ab-label">Agent Notes</span>
+                      <span class="ab-val notes-text">{ra['AGENT NOTES']}</span>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+
+            <div class="two-col">
+              <div class="detail-section">
+                <div class="section-label">Return Financials</div>
+                <div class="kv-list">
+                  <div class="kv-row"><span class="kv-key">Return Amount</span><span class="kv-val amber">{formatAmt(t.returnAmt)}</span></div>
+                  <div class="kv-row"><span class="kv-key">Net Loss</span><span class="kv-val red">{formatAmt(t.netLoss)}</span></div>
+                  <div class="kv-row"><span class="kv-key">Return Fee</span><span class="kv-val">{formatAmt(t.fee)}</span></div>
+                  <div class="kv-row"><span class="kv-key">Qty Returned</span><span class="kv-val">{t.item?.returnQty ?? '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Return Date</span><span class="kv-val">{formatDate(t.created)}</span></div>
+                </div>
+              </div>
+              <div class="detail-section">
+                <div class="section-label">Item Details <span class="sf-tag">✦ Snowflake</span></div>
+                <div class="kv-list">
+                  <div class="kv-row"><span class="kv-key">Product</span><span class="kv-val">{t.item?.name ?? '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Brand</span><span class="kv-val">{t.item?.brand || '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.categoryFull || t.item?.category || '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Class</span><span class="kv-val">{t.item?.class ?? '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `${t.item.price}` : '—'}</span></div>
+                  <div class="kv-row"><span class="kv-key">Return Reason</span><span class="kv-val">{t.returnReason ?? '—'}</span></div>
+                  {#if t.item?.url}<div class="kv-row"><span class="kv-key">Product Page</span><span class="kv-val"><a href={t.item.url} target="_blank" rel="noreferrer" class="item-link">View ↗</a></span></div>{/if}
+                </div>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-label">Customer Details</div>
+              <div class="customer-card">
+                <div class="cust-avatar">{(t.customer?.name ?? 'U').split(' ').map(n => n[0]).join('').slice(0,2)}</div>
+                <div class="cust-body">
+                  <div class="cust-row">
+                    <div class="cust-main">
+                      <div class="cust-name">{t.customer?.name ?? '—'}</div>
+                      <div class="cust-tier tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</div>
+                    </div>
+                  </div>
+                  <div class="cust-contact">
+                    <div class="contact-item">
+                      <span class="contact-icon">✉</span>
+                      <span class="contact-val">{t.customer?.email ?? '—'}</span>
+                    </div>
+                  </div>
+                  <div class="cust-stats">
+                    <div class="cust-stat"><span class="cust-stat-val">{t.customer?.ltv ?? '—'}</span><span class="cust-stat-label">Est. LTV</span></div>
+                    <div class="cust-stat"><span class="cust-stat-val">{t.customer?.orders ?? '—'}</span><span class="cust-stat-label">Returns</span></div>
+                    <div class="cust-stat"><span class="cust-stat-val tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</span><span class="cust-stat-label">Tier</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── idle: manual resolution only ── -->
+            {#if uiStage === 'idle'}
+              <div class="action-bar">
+                <button class="btn-action btn-manual" on:click={handleManualClick}>✎ Manually Resolve</button>
+              </div>
+
+            <!-- ── manual_selecting: pick a resolution ── -->
+            {:else if uiStage === 'manual_selecting'}
+              <div class="detail-section resolution-section">
+                <div class="section-label">Select Resolution Action</div>
+                <div class="resolution-grid">
+                  {#each RESOLUTION_OPTIONS as opt}
+                    <button class="res-option color-{opt.color}" on:click={() => handleSelectResolution(opt)}>
+                      <span class="res-icon">{opt.icon}</span>
+                      <span class="res-label">{opt.label}</span>
+                      <span class="res-desc">{opt.desc}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+
+            <!-- ── manual_selected: show choice + confirm ── -->
+            {:else if uiStage === 'manual_selected'}
+              <div class="detail-section resolution-section">
+                <div class="section-label">
+                  Selected Resolution
+                  <button class="link-btn" on:click={handleBack}>← Change</button>
+                </div>
+                <div class="selected-resolution color-{selectedResolution.color}">
+                  <span class="res-icon">{selectedResolution.icon}</span>
+                  <div>
+                    <div class="res-label">{selectedResolution.label}</div>
+                    <div class="res-desc">{selectedResolution.desc}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="action-bar">
+                <button class="btn-action btn-confirm" on:click={handleConfirm} disabled={confirmLoading}>
+                  {#if confirmLoading}<span class="spinner-sm"></span> Closing…{:else}✓ Confirm & Close Ticket{/if}
+                </button>
+              </div>
+
+            <!-- ── confirmed: persisted closed state ── -->
+            {:else if uiStage === 'confirmed'}
+              {#if t.resolution}
+                <div class="detail-section resolution-section">
+                  <div class="section-label">Resolution Applied</div>
+                  <div class="selected-resolution color-{resolutionColor(t.resolution)}">
+                    <span class="res-icon">{resolutionIcon(t.resolution)}</span>
+                    <div>
+                      <div class="res-label">{resolutionLabel(t.resolution)}</div>
+                      <div class="res-desc">Persisted to Snowflake · SR_RESOLUTION = '{t.resolution}'</div>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+              <div class="closed-banner">✓ Ticket closed and persisted to Snowflake</div>
+            {/if}
+
+          </div>
+        {:else}
+          <div class="detail-empty">
+            <div class="empty-icon">↩</div>
+            <div>Select a return to review</div>
+            <div class="empty-sub">Live from Snowflake · STORE_RETURNS × ITEM × REASON × CUSTOMER</div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -524,6 +471,26 @@
   .topbar-stats{display:flex;gap:8px;flex-wrap:wrap}
   .stat-pill{display:flex;align-items:center;gap:7px;padding:6px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:20px;font-size:12px;font-weight:600;font-family:var(--font-mono);color:var(--text-secondary)}
   .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+
+  /* ── Queue Stage ── */
+  .queue-stage{display:flex;align-items:center;justify-content:center;height:calc(100vh - 65px);background:var(--bg-base)}
+  .queue-container{display:flex;flex-direction:column;align-items:center;gap:32px;max-width:400px}
+  .queue-header{text-align:center;margin-bottom:12px}
+  .queue-header h3{font-family:var(--font-display);font-size:28px;font-weight:400;margin-bottom:8px;color:var(--text-primary)}
+  .queue-header p{font-size:14px;color:var(--text-muted)}
+  
+  .queue-counts{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;width:100%;margin:16px 0}
+  .count-card{display:flex;flex-direction:column;align-items:center;padding:20px;background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--radius-md);gap:8px}
+  .count-number{font-family:var(--font-mono);font-size:32px;font-weight:700;color:var(--amber)}
+  .count-label{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em}
+
+  .btn-queue{display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 28px;background:var(--amber);border:none;border-radius:var(--radius-sm);color:#0c0e14;font-size:14px;font-weight:600;cursor:pointer;transition:background 0.15s;width:100%}
+  .btn-queue:hover:not(:disabled){background:#e0b855}
+  .btn-queue:disabled{opacity:0.6;cursor:not-allowed}
+
+  .queue-error{font-size:12px;color:var(--red);padding:12px;background:var(--red-dim);border:1px solid rgba(224,92,92,0.3);border-radius:var(--radius-sm);text-align:center;width:100%}
+
+  /* ── Split View ── */
   .split-view{display:flex;overflow:hidden;height:calc(100vh - 65px)}
 
   .list-panel{width:380px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;height:100%;overflow:hidden}
@@ -540,7 +507,6 @@
   .tab-btn.active .tab-count{background:var(--amber-glow);border-color:rgba(212,168,67,0.3);color:var(--amber)}
 
   .returns-list{flex:1;overflow-y:auto;padding:8px}
-  .list-loading{display:flex;align-items:center;gap:10px;color:var(--text-muted);font-size:13px;padding:24px 16px;justify-content:center}
   .list-banner{font-size:12px;padding:10px 14px;border-radius:var(--radius-sm);margin:6px;line-height:1.5}
   .list-banner.warn{background:var(--amber-glow);color:var(--amber);border:1px solid rgba(212,168,67,0.25)}
   .empty-state{text-align:center;color:var(--text-muted);font-size:13px;padding:40px}
@@ -615,8 +581,6 @@
   .btn-action:disabled{opacity:0.5;cursor:not-allowed}
   .btn-manual{background:var(--green-dim);border-color:rgba(76,175,130,0.4);color:var(--green)}
   .btn-manual:hover{background:rgba(76,175,130,0.25)}
-  .btn-ai{background:var(--amber-glow);border-color:rgba(212,168,67,0.4);color:var(--amber)}
-  .btn-ai:hover{background:rgba(212,168,67,0.2)}
   .btn-confirm{background:var(--green);border-color:var(--green);color:#0c0e14;font-size:14px}
   .btn-confirm:hover:not(:disabled){background:#5dc99a}
 
@@ -649,33 +613,6 @@
   .link-btn{background:none;border:none;color:var(--text-muted);font-size:11px;cursor:pointer;padding:0;font-family:var(--font-mono);text-decoration:underline}
   .link-btn:hover{color:var(--amber)}
 
-  .triage-section{border-color:rgba(212,168,67,0.2)}
-  .triage-action{padding:12px 14px;border-radius:var(--radius-sm);margin-bottom:14px;border:1px solid}
-  .action-replacement_escalate{background:rgba(224,92,92,0.08);border-color:rgba(224,92,92,0.25)}
-  .action-replacement{background:rgba(91,140,240,0.08);border-color:rgba(91,140,240,0.25)}
-  .action-exchange_first{background:rgba(212,168,67,0.08);border-color:rgba(212,168,67,0.25)}
-  .action-retention_offer{background:rgba(224,138,60,0.08);border-color:rgba(224,138,60,0.25)}
-  .action-refund,.action-refund_or_reship{background:rgba(76,175,130,0.08);border-color:rgba(76,175,130,0.25)}
-  .triage-action-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
-  .triage-action-label{font-size:13.5px;font-weight:700;color:var(--text-primary)}
-  .triage-action-type{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em}
-  .triage-rationale{font-size:12.5px;color:var(--text-secondary);line-height:1.6}
-  .triage-meta{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
-  .triage-meta-item{display:flex;flex-direction:column;gap:5px}
-  .triage-meta-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;font-family:var(--font-mono)}
-  .triage-meta-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 8px;border-radius:10px;align-self:flex-start}
-  .refund-full{background:var(--green-dim);color:var(--green);border:1px solid rgba(76,175,130,0.3)}
-  .refund-partial{background:var(--amber-glow);color:var(--amber);border:1px solid rgba(212,168,67,0.3)}
-  .refund-bulk{background:var(--orange-dim);color:var(--orange);border:1px solid rgba(224,138,60,0.3)}
-  .triage-meta-note{font-size:11.5px;color:var(--text-secondary);line-height:1.55}
-  .triage-flags{display:flex;flex-direction:column;gap:6px}
-  .triage-flag{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;border-radius:var(--radius-sm);font-size:12px}
-  .flag-critical{background:var(--red-dim);border:1px solid rgba(224,92,92,0.25)}
-  .flag-high{background:var(--orange-dim);border:1px solid rgba(224,138,60,0.25)}
-  .flag-medium{background:var(--amber-glow);border:1px solid rgba(212,168,67,0.25)}
-  .flag-label{font-weight:600;color:var(--text-primary)}
-  .flag-sev{font-family:var(--font-mono);font-size:10px;text-transform:uppercase;color:var(--text-muted)}
-
   .closed-banner{display:flex;align-items:center;gap:10px;padding:14px 18px;background:var(--green-dim);border:1px solid rgba(76,175,130,0.3);border-radius:var(--radius-md);color:var(--green);font-weight:600;font-size:14px;margin-bottom:12px}
 
   .spinner-sm{width:13px;height:13px;border:2px solid rgba(0,0,0,0.2);border-top-color:currentColor;border-radius:50%;animation:spin 0.7s linear infinite;display:inline-block}
@@ -683,10 +620,6 @@
 
   .item-link{color:var(--amber);font-size:12px;font-family:var(--font-mono);text-decoration:none;border-bottom:1px solid rgba(212,168,67,0.4)}
   .item-link:hover{border-bottom-color:var(--amber)}
-  .ai-loading-block{display:flex;align-items:center;gap:12px;padding:20px 0;color:var(--amber);font-size:13px;font-weight:600;font-family:var(--font-mono)}
-  .ai-loading-block .spinner-sm{border-color:rgba(212,168,67,0.3);border-top-color:var(--amber)}
-  .ai-error-banner{padding:10px 14px;background:var(--red-dim);border:1px solid rgba(224,92,92,0.3);border-radius:var(--radius-sm);color:var(--red);font-size:12px;margin-bottom:10px}
-  .ai-tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;color:var(--amber);background:var(--amber-glow);border:1px solid rgba(212,168,67,0.3)}
 
   /* Manual entry badges */
   .manual-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:var(--blue);background:var(--blue-dim);border:1px solid rgba(91,140,240,0.3)}

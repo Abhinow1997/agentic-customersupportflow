@@ -29,6 +29,7 @@ from app.routers import (
     suggest_reason,
     transcribe,
     instagram_posts,
+    access_item_return,
 )
 
 settings = get_settings()
@@ -69,6 +70,7 @@ app.include_router(items.router)
 app.include_router(suggest_reason.router)
 app.include_router(transcribe.router)
 app.include_router(instagram_posts.router)
+app.include_router(access_item_return.router)
 
 # ── Root ─────────────────────────────────────────────────────────────────────
 

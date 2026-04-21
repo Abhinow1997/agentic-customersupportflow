@@ -16,7 +16,6 @@
   // Derive active nav item from current path
   $: path = $page.url.pathname;
   $: isReturns   = path === '/dashboard' || path === '/dashboard/';
-  $: isEnquiries = path.startsWith('/dashboard/enquiries');
   $: isCreate    = path.startsWith('/dashboard/create');
   $: isInstagramPosts = path.startsWith('/dashboard/instagram-posts');
   $: isAnalytics = false;
@@ -43,13 +42,6 @@
           <path d="M16 17l-4 4-4-4m0-10l4-4 4 4M3 12h18"/>
         </svg>
         Returned Items
-      </a>
-
-      <a href="/dashboard/enquiries" class="nav-item" class:active={isEnquiries}>
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-        </svg>
-        Enquiry Tickets
       </a>
 
       <a href="/dashboard/create" class="nav-item" class:active={isCreate}>

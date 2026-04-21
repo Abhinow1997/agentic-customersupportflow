@@ -37,6 +37,20 @@
   let assessmentLoading  = false;
   let assessmentComplete = false;
   let assessmentError    = '';
+  let assessmentResult   = null;
+  let followUpMode       = false;
+  let followUpQuestions  = [];
+  let followUpCollected  = [];
+  let activeFollowUpIndex = 0;
+  let activeFollowUpAnswer = '';
+  let followUpError      = '';
+  $: assessmentResultJson = assessmentResult ? JSON.stringify(assessmentResult, null, 2) : '';
+
+  // ── Decision logging ─────────────────────────────────────────────────────
+  let decisionLogging = false;
+  let decisionLogged  = false;
+  let decisionId      = '';
+  let decisionError   = '';
 
   const PACKAGING_CONDITIONS = [
     { id: 'sealed',    label: 'Sealed / Unopened',    desc: 'Original seal intact, never opened',         factor: 0.05, color: 'green'  },
@@ -188,8 +202,7 @@
     ? [{ n: 1, label: 'Enquiry Details' }]
     : [
         { n: 1, label: 'Customer Lookup' },
-        { n: 2, label: 'Item & Assessment' },
-        { n: 3, label: 'Financials & Submit' },
+        { n: 2, label: 'Assessment & Decision' },
       ];
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -210,12 +223,8 @@
     ? (enquiryRawMessage.trim())
     : (lookupStatus !== '' && custName.trim());
     
-  // Only allow proceeding if the user selected a package condition
-  $: step2Valid = itemLookupStatus === 'found' && packagingCondition;
-  
-  $: step3Valid = ticketType === 'return'
-    ? (!!itemDetails && returnAmt !== '')
-    : true;
+  // Step 2 is valid once decision is logged
+  $: step2Valid = decisionLogged;
 
   // Reset assessment complete flag if package condition changes
   $: if (packagingCondition) {
@@ -267,46 +276,70 @@
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null;
     packagingCondition = '';
     assessmentComplete = false;
+    resetFollowUpState();
   }
 
   // ── Assess Item Return ────────────────────────────────────────────────────
-  async function handleAssessReturn() {
-    if (!itemDetails || !packagingCondition) return;
+  function buildAssessmentPayload(followUpAnswers = []) {
+    return {
+      item_sk: itemDetails.sk,
+      price: itemDetails.price,
+      return_qty: returnQty,
+      packaging_condition: packagingCondition,
+      factor: packagingFactor,
+      customer_email: custEmail.trim() || lookupEmail.trim(),
+      customer_remarks: complaintDesc.trim(),
+      follow_up_answers: followUpAnswers,
+    };
+  }
+
+  function resetFollowUpState() {
+    followUpMode = false;
+    followUpQuestions = [];
+    followUpCollected = [];
+    activeFollowUpIndex = 0;
+    activeFollowUpAnswer = '';
+    followUpError = '';
+  }
+
+  async function submitAssessment(followUpAnswers = []) {
+    if (!itemDetails) return;
     assessmentLoading = true;
     assessmentError = '';
     assessmentComplete = false;
 
     try {
-      const payload = {
-        item_sk: itemDetails.sk,
-        price: itemDetails.price,
-        return_qty: returnQty,
-        packaging_condition: packagingCondition,
-        factor: packagingFactor
-      };
-
       const res = await fetch(`${FASTAPI}/api/access_item_return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(buildAssessmentPayload(followUpAnswers))
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message ?? `HTTP Error ${res.status}`);
-      
-      // Mark as complete so user can proceed visually or see success
-      assessmentComplete = true;
+      console.log('access_item_return response', data);
+      assessmentResult = data;
+      followUpMode = Boolean(data.awaitingFollowUp);
+      followUpQuestions = data.followUpQuestions ?? data.remarksAnalysis?.follow_up_questions ?? [];
+      assessmentComplete = Boolean(data.assessmentComplete) && !followUpMode;
 
-      // Optional: Update financial values if the API returns overridden amounts
       if (data.returnAmt !== undefined) {
-          returnAmt = data.returnAmt;
-          returnAmtEdited = true;
+        returnAmt = data.returnAmt;
+        returnAmtEdited = true;
       }
       if (data.netLoss !== undefined) {
-          netLoss = data.netLoss;
-          netLossEdited = true;
+        netLoss = data.netLoss;
+        netLossEdited = true;
       }
 
+      if (followUpMode) {
+        followUpCollected = [];
+        activeFollowUpIndex = 0;
+        activeFollowUpAnswer = '';
+        followUpError = '';
+      } else {
+        resetFollowUpState();
+      }
     } catch (e) {
       assessmentError = e.message;
     } finally {
@@ -314,13 +347,118 @@
     }
   }
 
+  async function handleAssessReturn() {
+    resetFollowUpState();
+    assessmentResult = null;
+    await submitAssessment([]);
+  }
+
+  function getDecisionSummary(result) {
+    if (!result) return '';
+    const parts = [];
+    if (result.remarksAnalysis?.summary) parts.push(result.remarksAnalysis.summary);
+    if (result.awaitingFollowUp) {
+      parts.push('The backend still needs customer answers for the remaining questions.');
+    } else if (result.assessmentComplete) {
+      parts.push('All required checks are complete and ready for the financial review step.');
+    }
+    const unmet = (result.questions ?? []).filter(q => !q.validated).slice(0, 2);
+    if (unmet.length) {
+      parts.push(`Main unresolved checks: ${unmet.map(q => q.question).join(' ')}.`);
+    }
+    return parts.join(' ');
+  }
+
+  async function handleFollowUpNext() {
+    const current = followUpQuestions?.[activeFollowUpIndex];
+    if (!current) return;
+    if (!activeFollowUpAnswer.trim()) {
+      followUpError = 'Please provide an answer before continuing.';
+      return;
+    }
+
+    followUpError = '';
+    const nextCollected = [
+      ...followUpCollected.filter(item => String(item.question_id) !== String(current.question_id)),
+      {
+        question_id: current.question_id,
+        question: current.question,
+        key: current.key,
+        answer: activeFollowUpAnswer.trim(),
+      }
+    ];
+    followUpCollected = nextCollected;
+
+    if (activeFollowUpIndex < followUpQuestions.length - 1) {
+      activeFollowUpIndex += 1;
+      activeFollowUpAnswer = followUpCollected.find(item => String(item.question_id) === String(followUpQuestions[activeFollowUpIndex].question_id))?.answer ?? '';
+      return;
+    }
+
+    await submitAssessment(nextCollected);
+  }
+
+  // ── Log Decision ─────────────────────────────────────────────────────────
+  async function handleLogDecision(decision) {
+    if (!assessmentResult || !itemDetails) return;
+    
+    decisionLogging = true;
+    decisionError = '';
+    
+    const questionsValidated = (assessmentResult.questions || []).filter(q => q.validated).length;
+    const summary = getDecisionSummary(assessmentResult);
+    
+    try {
+      const res = await fetch(`${FASTAPI}/api/returns/log_decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_email: custEmail.trim() || lookupEmail.trim(),
+          customer_name: custName.trim(),
+          customer_tier: custTier,
+          item_sk: itemDetails.sk,
+          item_name: itemDetails.name,
+          item_category: itemDetails.category || itemDetails.category_full || '',
+          return_qty: returnQty,
+          packaging_condition: packagingCondition,
+          packaging_factor: packagingFactor,
+          return_amt: parseFloat(returnAmt) || 0,
+          net_loss: parseFloat(netLoss) || 0,
+          assessment_confidence: assessmentResult.assessmentConfidence || 0,
+          assessment_complete: assessmentResult.assessmentComplete || false,
+          questions_validated: questionsValidated,
+          assessment_summary: summary,
+          decision: decision,
+          decision_note: '',
+        })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      
+      decisionLogged = true;
+      decisionId = data.decision_id || '—';
+      
+      // Enable proceeding to next step
+      setTimeout(() => {
+        step2Valid = true;
+      }, 100);
+      
+    } catch (e) {
+      decisionError = e.message;
+    } finally {
+      decisionLogging = false;
+    }
+  }
+
   // ── Navigation ────────────────────────────────────────────────────────────
-  function nextStep() { if (step < 3) step++; }
+  function nextStep() { if (step < 2) step++; }
   function prevStep() { if (step > 1) step--; }
   function setTicketType(t) {
     ticketType = t; step = 1;
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null;
-    packagingCondition = ''; assessmentComplete = false;
+    packagingCondition = ''; assessmentComplete = false; assessmentResult = null;
+    resetFollowUpState();
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = '';
@@ -376,7 +514,7 @@
     lookupEmail = ''; lookupStatus = ''; custName = ''; custEmail = '';
     custTier = 'Bronze'; custSk = null; channel = 'email'; complaintDesc = '';
     itemLookupSk = ''; itemLookupStatus = ''; itemDetails = null; returnQty = 1;
-    packagingCondition = ''; assessmentComplete = false;
+    packagingCondition = ''; assessmentComplete = false; assessmentResult = null;
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
@@ -434,7 +572,7 @@
       <div class="step-bar">
         {#each stepLabels as s}
           <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
-            on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; else if (s.n === 3 && step2Valid) step = 3; }}>
+            on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; }}>
             <span class="step-num">{step > s.n ? '✓' : s.n}</span>
             <span class="step-label">{s.label}</span>
           </button>
@@ -704,159 +842,284 @@
             {/if}
           </div>
 
-          <div class="form-section" class:section-locked={!itemDetails}>
+          <div class="form-section">
             <div class="section-title">
-              Package Condition Assessment <span class="req">*</span>
-              {#if !itemDetails}<span class="lock-hint">— look up an item first</span>{/if}
+              Return Decision Prep
+              <span class="lock-hint">Start with customer remarks, then reveal the package assessment and missing questions.</span>
             </div>
 
-            <div class="packaging-grid">
-              {#each PACKAGING_CONDITIONS as cond}
-                <button
-                  class="pkg-card pkg-{cond.color}"
-                  class:selected={packagingCondition === cond.id}
-                  disabled={!itemDetails}
-                  on:click={() => packagingCondition = cond.id}
-                >
-                  <div class="pkg-card-top">
-                    <span class="pkg-label">{cond.label}</span>
-                  </div>
-                  <span class="pkg-desc">{cond.desc}</span>
-                </button>
-              {/each}
-            </div>
-
-            {#if packagingCondition && itemDetails}
-              <div class="assessment-action mt-12">
-                <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={assessmentLoading}>
-                  {#if assessmentLoading}
-                    <span class="spinner-sm"></span> Assessing...
-                  {:else}
-                    ✦ Assess Return
-                  {/if}
-                </button>
-                {#if assessmentError}
-                  <div class="error-banner mt-12">⚠ {assessmentError}</div>
+            <div class="assessment-action mt-12">
+              <div class="field-group mb-12">
+                <label class="field-label">Customer remarks (optional)</label>
+                <textarea
+                  bind:value={complaintDesc}
+                  rows="4"
+                  class="remarks-box"
+                  placeholder="Optional notes from the customer. Example: 'Customer says the item arrived damaged and they still have the receipt.'"
+                />
+                <div class="field-hint">These notes are used as the researcher’s starting evidence before policy validation.</div>
+              </div>
+              <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={assessmentLoading || !itemDetails}>
+                {#if assessmentLoading}
+                  <span class="spinner-sm"></span> Analyzing...
+                {:else}
+                  ✦ Analyze Return
                 {/if}
-                {#if assessmentComplete && !assessmentError}
-                  <div class="assessment-success">
-                    <span class="banner-icon">✓</span> Assessment logged successfully.
+              </button>
+              {#if assessmentError}
+                <div class="error-banner mt-12">⚠ {assessmentError}</div>
+              {/if}
+              {#if assessmentResult && !assessmentError}
+                <div class="assessment-success">
+                  <span class="banner-icon">✓</span> Assessment completed for decision prep.
+                </div>
+              {/if}
+            </div>
+
+            {#if assessmentResult}
+              <div class="assessment-result-panel">
+                <div class="assessment-result-header">
+                  <div>
+                    <div class="assessment-result-title">Assessment Summary</div>
+                    <div class="assessment-result-sub">{getDecisionSummary(assessmentResult)}</div>
+                    <!-- DEBUG -->
+                    <div style="color: red; font-size: 10px; margin-top: 4px;">
+                    </div>
                   </div>
+                  <span class="result-badge {assessmentResult.assessmentComplete ? 'ok' : 'warn'}">
+                    {assessmentResult.awaitingFollowUp ? 'needs answers' : assessmentResult.assessmentComplete ? 'complete' : 'review'}
+                  </span>
+                </div>
+
+                <div class="assessment-result-grid">
+                  <div class="result-card">
+                    <span class="result-label">Confidence</span>
+                    <span class="result-value">{Number(assessmentResult.assessmentConfidence ?? 0).toFixed(3)}</span>
+                  </div>
+                  <div class="result-card">
+                    <span class="result-label">Return Amt</span>
+                    <span class="result-value">${Number(assessmentResult.returnAmt ?? 0).toFixed(2)}</span>
+                  </div>
+                  <div class="result-card">
+                    <span class="result-label">Net Loss</span>
+                    <span class="result-value">${Number(assessmentResult.netLoss ?? 0).toFixed(2)}</span>
+                  </div>
+                  <div class="result-card">
+                    <span class="result-label">Questions</span>
+                    <span class="result-value">{assessmentResult.questions?.length ?? 0}</span>
+                  </div>
+                </div>
+
+                {#if assessmentResult.remarksAnalysis?.summary}
+                  <div class="result-block">
+                    <div class="result-block-title">Decision Reasoning</div>
+                    <div class="remarks-summary">{assessmentResult.remarksAnalysis.summary}</div>
+                  </div>
+                {/if}
+
+                {#if assessmentResult.awaitingFollowUp && followUpMode && followUpQuestions?.length}
+                  <div class="result-block follow-up-panel">
+                    <div class="result-block-title">Still Needed</div>
+                    <div class="follow-up-card">
+                      <div class="follow-up-progress">
+                        Question {activeFollowUpIndex + 1} of {followUpQuestions.length}
+                      </div>
+                      <div class="follow-up-question">
+                        {followUpQuestions[activeFollowUpIndex]?.question}
+                      </div>
+                      <textarea
+                        bind:value={activeFollowUpAnswer}
+                        rows="4"
+                        class="remarks-box"
+                        placeholder="Type the customer's answer here"
+                      />
+                      {#if followUpError}
+                        <div class="error-banner mt-12">⚠ {followUpError}</div>
+                      {/if}
+                      <div class="follow-up-actions">
+                        <button class="btn btn-primary" on:click={handleFollowUpNext} disabled={assessmentLoading}>
+                          {#if assessmentLoading}
+                            <span class="spinner-sm"></span> Validating...
+                          {:else if activeFollowUpIndex < followUpQuestions.length - 1}
+                            Save & Next
+                          {:else}
+                            Validate Answers
+                          {/if}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="coverage-list mt-12">
+                      {#each followUpQuestions as followUp, idx}
+                        <div class="coverage-item">
+                          <div class="coverage-item-head">
+                            <span>{followUp.question}</span>
+                            <span class="coverage-pill {idx === activeFollowUpIndex ? 'warn' : 'ok'}">
+                              {idx === activeFollowUpIndex ? 'active' : 'queued'}
+                            </span>
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+
+                <details class="trace-details">
+                  <summary>Endpoint logs and raw response</summary>
+                  <div class="trace-body">
+                    {#if assessmentResult.remarksAnalysis}
+                      <div class="result-block">
+                        <div class="result-block-title">Remarks Analysis</div>
+                        <pre>{JSON.stringify(assessmentResult.remarksAnalysis, null, 2)}</pre>
+                      </div>
+                    {/if}
+                    <div class="result-block">
+                      <div class="result-block-title">Raw Endpoint Response</div>
+                      <pre>{assessmentResultJson}</pre>
+                    </div>
+                    {#if assessmentResult.salesHistory}
+                      <div class="result-block">
+                        <div class="result-block-title">Sales History</div>
+                        <pre>{JSON.stringify(assessmentResult.salesHistory, null, 2)}</pre>
+                      </div>
+                    {/if}
+                    {#if assessmentResult.salesValidation}
+                      <div class="result-block">
+                        <div class="result-block-title">Sales Validation</div>
+                        <pre>{JSON.stringify(assessmentResult.salesValidation, null, 2)}</pre>
+                      </div>
+                    {/if}
+                    {#if assessmentResult.itemValidation}
+                      <div class="result-block">
+                        <div class="result-block-title">Item Validation</div>
+                        <pre>{JSON.stringify(assessmentResult.itemValidation, null, 2)}</pre>
+                      </div>
+                    {/if}
+                    {#if assessmentResult.questions?.length}
+                      <div class="result-block">
+                        <div class="result-block-title">Question Coverage</div>
+                        <div class="coverage-list">
+                          {#each assessmentResult.questions as question}
+                            <div class="coverage-item">
+                              <div class="coverage-item-head">
+                                <span>{question.question}</span>
+                                <span class="coverage-pill {question.validated ? 'ok' : 'warn'}">
+                                  {question.validated ? 'validated' : 'needs input'}
+                                </span>
+                              </div>
+                              <div class="coverage-item-meta">
+                                <span><strong>Source:</strong> {question.answerSource || question.answer_source || 'n/a'}</span>
+                                <span><strong>Answer:</strong> {question.answer || '—'}</span>
+                              </div>
+                              {#if question.exactIssue || question.exact_issue}
+                                <div class="coverage-item-issue">{question.exactIssue || question.exact_issue}</div>
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                </details>
+              </div>
+            {/if}
+
+{#if assessmentComplete && !followUpMode && !decisionLogged}
+              <div class="decision-panel">
+                <div class="decision-panel-header">
+                  <span class="decision-icon">✓</span>
+                  <div>
+                    <div class="decision-title">Assessment Complete — Make Final Decision</div>
+                    <div class="decision-subtitle">Based on the multi-agent analysis, decide whether to approve or deny this return</div>
+                  </div>
+                </div>
+
+                {#if assessmentResult.remarksAnalysis?.summary}
+                  <div class="decision-suggestion">
+                    <div class="decision-suggestion-label">✦ AI Recommendation</div>
+                    <div class="decision-suggestion-text">{assessmentResult.remarksAnalysis.summary}</div>
+                  </div>
+                {/if}
+
+                <div class="decision-metrics">
+                  <div class="decision-metric">
+                    <span class="dm-label">Confidence</span>
+                    <span class="dm-value" class:high={assessmentResult.assessmentConfidence >= 0.7} class:low={assessmentResult.assessmentConfidence < 0.7}>
+                      {(assessmentResult.assessmentConfidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <div class="decision-metric">
+                    <span class="dm-label">Validated</span>
+                    <span class="dm-value">
+                      {(assessmentResult.questions || []).filter(q => q.validated).length}/5
+                    </span>
+                  </div>
+                  <div class="decision-metric">
+                    <span class="dm-label">Net Loss</span>
+                    <span class="dm-value loss">${Number(assessmentResult.netLoss || 0).toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <div class="decision-actions">
+                  <button 
+                    class="btn btn-decision btn-approve" 
+                    on:click={() => handleLogDecision('approved')}
+                    disabled={decisionLogging}
+                  >
+                    {#if decisionLogging}
+                      <span class="spinner-sm"></span> Logging...
+                    {:else}
+                      ✓ Approve Return
+                    {/if}
+                  </button>
+                  <button 
+                    class="btn btn-decision btn-deny" 
+                    on:click={() => handleLogDecision('denied')}
+                    disabled={decisionLogging}
+                  >
+                    {#if decisionLogging}
+                      <span class="spinner-sm"></span> Logging...
+                    {:else}
+                      ✕ Deny Return
+                    {/if}
+                  </button>
+                </div>
+
+                {#if decisionError}
+                  <div class="error-banner mt-12">⚠ {decisionError}</div>
                 {/if}
               </div>
             {/if}
 
+            {#if decisionLogged}
+              <div class="decision-logged-banner">
+                <div class="decision-logged-content">
+                  <span class="banner-icon">✓</span>
+                  <div class="banner-body">
+                    <strong>Decision Logged Successfully</strong>
+                    <span class="banner-sub">Decision ID: {decisionId} — Return processing complete</span>
+                  </div>
+                </div>
+                <div class="decision-logged-actions">
+                  <button class="btn btn-primary" on:click={goToQueue}>View in Queue</button>
+                  <button class="btn btn-secondary" on:click={createAnother}>Create Another</button>
+                </div>
+              </div>
+            {/if}
+          
           </div>
-
           <div class="step-actions">
             <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            <button class="btn btn-primary" disabled={!step2Valid} on:click={nextStep}>Next: Financials →</button>
+            {#if !decisionLogged}
+              <div class="step-hint">Complete the assessment and make a decision to proceed</div>
+            {/if}
           </div>
 
 
         {:else if step === 2 && ticketType === 'enquiry'}
 
           <div class="form-section">
-            <div class="section-title">Input Mode</div>
-            <div class="input-mode-tabs">
-              <button class="mode-tab" class:active={enquiryInputMode === 'email'} on:click={() => enquiryInputMode = 'email'}>
-                <span class="mode-tab-icon">✉</span>
-                <div class="mode-tab-body">
-                  <span class="mode-tab-label">Email / Text Message</span>
-                  <span class="mode-tab-desc">Paste or type the customer's email, live chat or any written message</span>
-                </div>
-              </button>
-              <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
-                <span class="mode-tab-icon">🎙</span>
-                <div class="mode-tab-body">
-                  <span class="mode-tab-label">Voicemail</span>
-                  <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
-                </div>
-              </button>
-            </div>
-          </div>
-
-        {:else if step === 3 && ticketType === 'return'}
-
-          <div class="form-section">
-            <div class="section-title">Financial Details</div>
-            <div class="field-row">
-              <div class="field">
-                <label>
-                  Return Amount ($)
-                  {#if !returnAmtEdited}
-                    <span class="field-note">auto from item price × qty</span>
-                  {:else}
-                    <button class="btn-reset" on:click={() => { returnAmtEdited = false; netLossEdited = false; }}>↺ reset</button>
-                  {/if}
-                </label>
-                <input
-                  type="number" step="0.01" min="0"
-                  bind:value={returnAmt}
-                  on:input={() => returnAmtEdited = true}
-                />
-              </div>
-              <div class="field">
-                <label>
-                  Net Loss ($)
-                  {#if !netLossEdited}
-                    <span class="field-note">auto calculated</span>
-                  {:else}
-                    <button class="btn-reset" on:click={() => netLossEdited = false}>↺ reset</button>
-                  {/if}
-                </label>
-                <input
-                  type="number" step="0.01" min="0"
-                  bind:value={netLoss}
-                  on:input={() => netLossEdited = true}
-                />
-              </div>
-            </div>
-            <div class="formula-bar">
-              <span class="fb-label">Formula:</span>
-              <span class="fb-eq">
-                ${parseFloat(itemDetails?.price ?? 0).toFixed(2)} × {returnQty}
-                <span class="fb-op">=</span> ${returnAmt}
-                <span class="fb-op">×</span>
-                {Math.round(packagingFactor * 100)}%
-                <span class="fb-op">=</span>
-                <strong>${netLoss || '—'}</strong>
-              </span>
-              <span class="fb-cond">{packagingMeta?.label ?? 'No packaging selected'}</span>
-            </div>
-            <div class="field mt-12">
-              <label>Priority</label>
-              <div class="chip-group">
-                {#each PRIORITIES as p}
-                  <button class="chip priority-chip priority-{p.id}" class:selected={priority === p.id} on:click={() => priority = p.id}>
-                    {p.label}
-                  </button>
-                {/each}
-              </div>
-            </div>
-          </div>
-
-          <div class="form-section review-section">
-            <div class="section-title">Review Summary</div>
-            <div class="review-grid">
-              <div class="review-item"><span class="review-label">Customer</span><span class="review-val">{custName} <span class="tier-mini tier-{custTier.toLowerCase()}">{custTier}</span></span></div>
-              <div class="review-item"><span class="review-label">Channel</span><span class="review-val">{CHANNELS.find(c => c.id === channel)?.icon} {CHANNELS.find(c => c.id === channel)?.label}</span></div>
-              <div class="review-item"><span class="review-label">Item</span><span class="review-val">{truncate(itemDetails?.name ?? '', 40)}</span></div>
-              <div class="review-item"><span class="review-label">Qty</span><span class="review-val">{returnQty}</span></div>
-              <div class="review-item"><span class="review-label">Packaging</span><span class="review-val">{packagingMeta?.label ?? '—'}</span></div>
-              <div class="review-item"><span class="review-label">Return Amount</span><span class="review-val amt">${parseFloat(returnAmt || 0).toFixed(2)}</span></div>
-              <div class="review-item"><span class="review-label">Net Loss</span><span class="review-val loss">${parseFloat(netLoss || 0).toFixed(2)}</span></div>
-            </div>
-
-          </div>
-
-          {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
-
-          <div class="step-actions">
-            <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            <button class="btn btn-submit" disabled={!step3Valid || submitting} on:click={handleSubmit}>
-              {#if submitting}<span class="spinner-sm"></span> Creating…{:else}✦ Create Return Ticket{/if}
-            </button>
+            <div class="section-title">Enquiry form placeholder</div>
+            <p style="color: var(--text-muted);">Enquiry handling not yet implemented for step 2.</p>
           </div>
 
         {/if}
@@ -901,6 +1164,8 @@
   .form-container { display: flex; flex-direction: column; gap: 16px; }
   .form-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; }
   .form-section.section-locked { opacity: 0.5; pointer-events: none; }
+  .form-section.section-hidden { display: none; }
+  .form-section.section-visible { display: block; }
   .section-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; font-family: var(--font-mono); margin-bottom: 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .section-sub   { font-size: 10px; color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
   .lock-hint { color: var(--text-muted); font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; }
@@ -987,6 +1252,41 @@
   .assessment-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
   .btn-assess { align-self: flex-start; }
   .assessment-success { font-size: 12px; color: var(--green); display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
+  .assessment-result-panel { width: 100%; margin-top: 14px; padding: 14px; border-radius: var(--radius-md); border: 1px solid rgba(212,168,67,0.2); background: linear-gradient(180deg, rgba(26,29,37,0.92), rgba(15,17,23,0.92)); }
+  .assessment-result-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+  .assessment-result-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .assessment-result-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .result-badge { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 4px 8px; border-radius: 999px; border: 1px solid; }
+  .result-badge.ok { color: var(--green); background: var(--green-dim); border-color: rgba(76,175,130,0.35); }
+  .result-badge.warn { color: var(--amber); background: var(--amber-glow); border-color: rgba(212,168,67,0.35); }
+  .assessment-result-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .result-card { padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-elevated); }
+  .result-label { display: block; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono); }
+  .result-value { display: block; margin-top: 4px; font-size: 13px; color: var(--text-primary); font-weight: 600; font-family: var(--font-mono); }
+  .result-block { margin-top: 10px; }
+  .result-block-title { font-size: 11px; font-weight: 700; color: var(--amber); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .result-block pre { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: #0b0d12; border: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow: auto; max-height: 240px; white-space: pre-wrap; word-break: break-word; }
+  .field-group { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+  .field-label { font-size: 11px; font-weight: 700; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono); }
+  .field-hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+  .remarks-box { min-height: 96px; resize: vertical; }
+  .coverage-list { display: flex; flex-direction: column; gap: 8px; }
+  .coverage-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
+  .coverage-item-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; font-size: 12px; color: var(--text-primary); }
+  .coverage-item-meta { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 6px; font-size: 11.5px; color: var(--text-muted); }
+  .coverage-item-issue { margin-top: 6px; padding: 8px 10px; border-left: 3px solid var(--amber); background: rgba(212,168,67,0.08); color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; border-radius: 4px; }
+  .coverage-pill { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+  .coverage-pill.ok { color: var(--green); background: var(--green-dim); border-color: rgba(76,175,130,0.35); }
+  .coverage-pill.warn { color: var(--amber); background: var(--amber-glow); border-color: rgba(212,168,67,0.35); }
+  .remarks-summary { font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
+  .follow-up-panel { display: flex; flex-direction: column; gap: 10px; }
+  .follow-up-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
+  .follow-up-progress { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--amber); }
+  .follow-up-question { font-size: 13px; color: var(--text-primary); line-height: 1.5; font-weight: 600; }
+  .follow-up-actions { display: flex; justify-content: flex-end; }
+  .trace-details { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); padding: 10px 12px; }
+  .trace-details summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--amber); text-transform: uppercase; letter-spacing: 0.08em; }
+  .trace-body { margin-top: 10px; }
   
   /* Reason grid */
   .reason-char-count { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-align: right; margin-top: 4px; }
@@ -1054,6 +1354,7 @@
 
   /* Step actions */
   .step-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+  .step-hint { font-size: 12px; color: var(--text-muted); font-style: italic; }
 
   /* Buttons */
   .btn { padding: 11px 22px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; letter-spacing: 0.03em; transition: all 0.15s; border: 1px solid; cursor: pointer; display: flex; align-items: center; gap: 8px; }
@@ -1185,4 +1486,33 @@
   /* Spinner */
   .spinner-sm { width: 13px; height: 13px; border: 2px solid rgba(0,0,0,0.2); border-top-color: currentColor; border-radius: 50%; animation: spin 0.7s linear infinite; display: inline-block; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Decision panel */
+  .decision-panel { margin-top: 14px; padding: 18px; border-radius: var(--radius-md); border: 1px solid rgba(76,175,130,0.3); background: var(--green-dim); }
+  .decision-panel-header { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
+  .decision-icon { font-size: 28px; color: var(--green); flex-shrink: 0; }
+  .decision-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .decision-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
+  .decision-suggestion { margin-bottom: 16px; padding: 12px 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .decision-suggestion-label { font-size: 10px; font-family: var(--font-mono); font-weight: 700; color: var(--amber); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .decision-suggestion-text { font-size: 13px; color: var(--text-primary); line-height: 1.6; }
+  .decision-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .decision-metric { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  .dm-label { font-size: 10px; font-family: var(--font-mono); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .dm-value { font-size: 14px; font-family: var(--font-mono); font-weight: 700; color: var(--text-primary); }
+  .dm-value.high { color: var(--green); }
+  .dm-value.low { color: var(--amber); }
+  .dm-value.loss { color: var(--red); }
+  .decision-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btn-decision { padding: 14px 22px; font-size: 14px; font-weight: 700; }
+  .btn-approve { background: var(--green-dim); border-color: rgba(76,175,130,0.4); color: var(--green); }
+  .btn-approve:hover:not(:disabled) { background: rgba(76,175,130,0.2); }
+  .btn-deny { background: var(--red-dim); border-color: rgba(224,92,92,0.4); color: var(--red); }
+  .btn-deny:hover:not(:disabled) { background: rgba(224,92,92,0.2); }
+  .decision-logged-banner { margin-top: 14px; padding: 16px 18px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
+  .decision-logged-content { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .decision-logged-banner .banner-icon { color: var(--green); font-size: 20px; }
+  .decision-logged-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .step-hint { font-size: 12px; color: var(--text-muted); font-style: italic; }
+
 </style>

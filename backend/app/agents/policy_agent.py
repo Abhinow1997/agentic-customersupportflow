@@ -1,41 +1,52 @@
 # app/agents/policy_agent.py
-"""
-Policy Agent - Policy Validation and Grounding
-
-Validates Researcher Agent's answers against scraped Walmart return policies.
-
-Communication Protocol:
-- Receives: question, proposed_answer, query, context from Researcher
-- Returns: {valid: bool, note: str, confidence: float, policy_ref: str}
-
-Current Implementation: STUB
-- Returns validation based on simple heuristics
-- To be enhanced with scrapling-based policy retrieval
-
-Future Enhancement (RL Component):
-- Learn which policy sections are most relevant for which questions
-- Optimize retrieval strategy through contextual bandits
-- Multi-objective: accuracy + retrieval speed
-"""
-from __future__ import annotations
+import json
 import logging
+import asyncio
+import re
+import litellm
 from typing import Any
+from app.config import get_settings
+from app.services.fetch_return_policies import WalmartPolicyFetcher
 
 logger = logging.getLogger("agents.policy")
+settings = get_settings()
 
+# System prompt for the Policy Auditor reasoning
+POLICY_AUDITOR_PROMPT = """You are a Policy Auditor for Walmart Returns. 
+Your task is to validate a "Proposed Answer" against the provided "Policy Source Text".
+
+You must determine:
+1. Is the proposed answer factually correct according to the policy?
+2. Are there any specific exceptions or windows (e.g., 90 vs 30 days) that conflict?
+
+Important:
+- Only judge the exact claim in the proposed answer.
+- Do not require unrelated policy details.
+- If the policy text does not explicitly support or contradict the answer, return
+  compliance_status = "insufficient_evidence" instead of marking it invalid.
+- Use "deviation" only when the source text explicitly contradicts the answer.
+
+Respond with ONLY a valid JSON object:
+{
+  "valid": boolean,
+  "compliance_status": "compliant" | "deviation" | "insufficient_evidence" | "error",
+  "exact_issue": "The precise mismatch, missing rule, or exception if any.",
+  "evidence": "Short quote or paraphrase from the policy that supports the verdict.",
+  "note": "A concise explanation of why it is valid or what specifically contradicts it.",
+  "confidence": float (0.0 to 1.0)
+}
+"""
 
 class PolicyAgent:
     """
-    Validates Researcher Agent answers against return policies.
-    
-    Currently a stub - will be enhanced with scrapling integration.
+    Validates Researcher Agent answers against live Walmart return policies
+    retrieved via Scrapling.
     """
     
     def __init__(self):
-        """Initialize Policy Agent with policy store (stub)"""
-        # TODO: Initialize scrapling-based policy retrieval
-        # self.policy_store = ChromaDB / Scrapling store
-        pass
+        self.fetcher = WalmartPolicyFetcher()
+        self.model = "gpt-4o-mini"
+        self._policy_cache: dict[str, dict[str, Any]] = {}
     
     async def validate(
         self,
@@ -45,188 +56,119 @@ class PolicyAgent:
         context: dict[str, Any]
     ) -> dict[str, Any]:
         """
-        Validate a proposed answer against return policies.
-        
-        Args:
-            question: The critical question being answered
-            proposed_answer: Researcher's proposed answer
-            query: Policy search query
-            context: Item and packaging context
-            
-        Returns:
-            {
-                "valid": bool,
-                "note": str,  # Validation feedback
-                "confidence": float,
-                "policy_ref": str,  # Which policy section was referenced
-                "retrieved_policies": list[str]  # Policy chunks retrieved
-            }
+        Routes the query to the correct Scrapling fetcher and validates the answer.
         """
-        logger.info(f"   🔍 POLICY AGENT: Validating answer")
-        logger.info(f"      Question: {question[:60]}")
-        logger.info(f"      Proposed: {proposed_answer[:60]}")
-        logger.info(f"      Query: {query}")
+        logger.info(f"   🛡️ POLICY AGENT: Fetching and Validating")
         
-        # ═════════════════════════════════════════════════════════════════
-        # STUB IMPLEMENTATION
-        # TODO: Replace with scrapling-based policy retrieval
-        # ═════════════════════════════════════════════════════════════════
+        # 1. ROUTING: Choose the correct fetcher based on the Researcher's query
+        cache_key = query.strip().lower()
+        policy_data = self._policy_cache.get(cache_key)
+        if not policy_data:
+            policy_data = await asyncio.to_thread(self._route_and_fetch, query)
+            if policy_data:
+                self._policy_cache[cache_key] = policy_data
         
-        # For now, use simple keyword-based validation
-        validation = self._stub_validate(question, proposed_answer, query, context)
-        
-        logger.info(f"      → Valid: {validation['valid']}, "
-                   f"Confidence: {validation['confidence']:.2f}")
-        if validation.get("note"):
-            logger.info(f"      → Note: {validation['note']}")
-        
-        return validation
-    
-    def _stub_validate(
-        self,
-        question: str,
-        proposed_answer: str,
-        query: str,
-        context: dict[str, Any]
-    ) -> dict[str, Any]:
-        """
-        STUB: Simple validation logic until scrapling is integrated.
-        
-        This will be replaced with actual policy retrieval and validation.
-        """
-        
-        # Question 1: Seller type
-        if "Sold & Shipped by Walmart" in question:
-            # Accept Walmart as default
-            if "Walmart" in proposed_answer:
-                return {
-                    "valid": True,
-                    "note": "Confirmed: TPC-DS items are Walmart-sold",
-                    "confidence": 0.9,
-                    "policy_ref": "return_policy.seller_requirements",
-                    "retrieved_policies": ["Walmart Return Policy - Seller Requirements"]
-                }
-            else:
-                return {
-                    "valid": False,
-                    "note": "Marketplace items have different return policies",
-                    "confidence": 0.6,
-                    "policy_ref": "return_policy.marketplace",
-                    "retrieved_policies": ["Walmart Marketplace Return Policy"]
-                }
-        
-        # Question 2: Purchase date
-        elif "purchase or delivery date" in question:
-            if "Unknown" in proposed_answer:
-                return {
-                    "valid": True,
-                    "note": "Purchase date required for return window validation - needs customer input",
-                    "confidence": 0.7,
-                    "policy_ref": "return_policy.time_limits",
-                    "retrieved_policies": ["Walmart Return Policy - Time Limits (90 days standard)"]
-                }
-            else:
-                return {
-                    "valid": True,
-                    "note": "Date accepted pending verification",
-                    "confidence": 0.8,
-                    "policy_ref": "return_policy.time_limits",
-                    "retrieved_policies": ["Walmart Return Policy - 90 Day Window"]
-                }
-        
-        # Question 3: Item category
-        elif "category of the item" in question:
-            # Always accept category pending DB lookup
+        if not policy_data or "Content not found" in policy_data['content']:
             return {
-                "valid": True,
-                "note": "Category accepted - different categories have different return policies",
-                "confidence": 0.8,
-                "policy_ref": "return_policy.category_specific",
-                "retrieved_policies": ["Walmart Return Policy - Category Guidelines"]
+                "valid": False,
+                "compliance_status": "error",
+                "exact_issue": f"Could not retrieve live policy for query: {query}",
+                "evidence": "",
+                "note": f"System Error: Could not retrieve live policy for query: {query}",
+                "confidence": 0.0,
+                "policy_ref": "unknown",
+                "source_name": "unknown",
+                "retrieved_policies": []
             }
+
+        # 2. AUDITING: Use LLM to compare the Researcher's answer to the live content
+        audit_result = await self._audit_with_llm(proposed_answer, policy_data['content'])
         
-        # Question 4: Proof of purchase
-        elif "receipt" in question or "proof" in question:
-            pkg = context.get("packaging_condition", "")
-            if pkg in ["sealed", "intact"]:
-                return {
-                    "valid": True,
-                    "note": "Good packaging condition suggests proof of purchase likely available",
-                    "confidence": 0.75,
-                    "policy_ref": "return_policy.receipt_requirements",
-                    "retrieved_policies": ["Walmart Return Policy - Receipt Required for Refunds"]
-                }
-            else:
-                return {
-                    "valid": True,
-                    "note": "Damaged packaging - receipt may not be required if other proof exists",
-                    "confidence": 0.6,
-                    "policy_ref": "return_policy.no_receipt_returns",
-                    "retrieved_policies": ["Walmart Return Policy - Returns Without Receipt"]
-                }
-        
-        # Question 5: Return reason
-        elif "Why is the customer returning" in question:
-            # Accept any reason - policy validation happens downstream
-            if "damage" in proposed_answer.lower():
-                return {
-                    "valid": True,
-                    "note": "Damage-related returns eligible for full refund per policy",
-                    "confidence": 0.85,
-                    "policy_ref": "return_policy.damaged_items",
-                    "retrieved_policies": ["Walmart Return Policy - Damaged/Defective Items"]
-                }
-            else:
-                return {
-                    "valid": True,
-                    "note": "General return reason accepted - standard return policy applies",
-                    "confidence": 0.75,
-                    "policy_ref": "return_policy.general",
-                    "retrieved_policies": ["Walmart General Return Policy"]
-                }
-        
-        # Default: accept with medium confidence
         return {
-            "valid": True,
-            "note": "Accepted pending policy review",
-            "confidence": 0.6,
-            "policy_ref": "return_policy.general",
-            "retrieved_policies": []
+            "valid": audit_result["compliance_status"] in ("compliant", "insufficient_evidence"),
+            "compliance_status": audit_result.get(
+                "compliance_status",
+                "compliant" if audit_result.get("valid") else "deviation",
+            ),
+            "exact_issue": audit_result.get("exact_issue", audit_result.get("note", "")),
+            "evidence": audit_result.get("evidence", ""),
+            "note": audit_result["note"],
+            "confidence": audit_result["confidence"],
+            "policy_ref": policy_data["source_url"],
+            "source_name": policy_data["policy_title"],
+            "retrieved_policies": [policy_data["policy_title"]]
         }
-    
-    # ═════════════════════════════════════════════════════════════════════
-    # FUTURE: Scrapling Integration
-    # ═════════════════════════════════════════════════════════════════════
-    
-    async def _retrieve_policies_scrapling(self, query: str) -> list[dict]:
+
+    def _route_and_fetch(self, query: str) -> dict:
         """
-        TODO: Implement scrapling-based policy retrieval
+        Maps the Researcher's 'policy_query' to a specific Scrapling function.
+        """
+        q = query.lower()
         
-        Will replace _stub_validate() with actual policy lookup:
-        1. Query ChromaDB with semantic search
-        2. Retrieve relevant policy chunks
-        3. Validate answer against retrieved policies
-        4. Return validation result with policy references
-        """
-        # from app.rag.store import query_policies
-        # results = await query_policies(query, k=3)
-        # return results
-        pass
-    
-    async def _validate_against_policies(
-        self,
-        proposed_answer: str,
-        retrieved_policies: list[dict]
-    ) -> dict[str, Any]:
-        """
-        TODO: Use LLM to validate answer against retrieved policies
+        if "marketplace" in q:
+            if "restriction" in q:
+                return self.fetcher.get_marketplace_restrictions()
+            return self.fetcher.get_marketplace_policy()
         
-        Will use LiteLLM to check if proposed answer aligns with policies:
-        - Extract key claims from proposed_answer
-        - Check each claim against policy text
-        - Return validation with confidence score
+        if "appliance" in q:
+            return self.fetcher.get_major_appliance_policy()
+        
+        if "refund" in q:
+            return self.fetcher.get_refund_timelines()
+            
+        # Default to standard return policy for all other queries
+        return self.fetcher.get_standard_return_policy()
+
+    async def _audit_with_llm(self, proposed_answer: str, policy_text: str) -> dict:
         """
-        # validation_prompt = build_validation_prompt(proposed_answer, retrieved_policies)
-        # result = await llm_call(validation_prompt)
-        # return parse_validation_result(result)
-        pass
+        Uses LiteLLM to cross-reference the proposed answer with the scraped policy text.
+        """
+        try:
+            # Send only the first 4000 characters to manage context windows
+            context_snippet = policy_text[:4000]
+            
+            user_prompt = f"""
+            POLICY SOURCE TEXT:
+            {context_snippet}
+
+            PROPOSED ANSWER TO VALIDATE:
+            {proposed_answer}
+
+            Return the most exact mismatch possible. If the answer is compliant, set
+            compliance_status to "compliant" and exact_issue to a short confirmation.
+            """
+
+            response = litellm.completion(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": POLICY_AUDITOR_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0, # Deterministic for auditing
+                response_format={"type": "json_object"}
+            )
+            
+            parsed = json.loads(response.choices[0].message.content)
+            parsed.setdefault("valid", False)
+            parsed.setdefault(
+                "compliance_status",
+                "compliant" if parsed["valid"] else "deviation",
+            )
+            if parsed.get("compliance_status") == "deviation" and not parsed.get("exact_issue"):
+                parsed["compliance_status"] = "insufficient_evidence"
+            parsed.setdefault("exact_issue", parsed.get("note", ""))
+            parsed.setdefault("evidence", "")
+            parsed.setdefault("note", parsed.get("exact_issue", "Policy validation completed."))
+            parsed.setdefault("confidence", 0.0)
+            return parsed
+
+        except Exception as e:
+            logger.error(f"LLM Policy Audit failed: {e}")
+            return {
+                "valid": False, 
+                "compliance_status": "error",
+                "exact_issue": "Policy audit failed due to technical error.",
+                "evidence": "",
+                "note": "Technical failure during policy auditing.", 
+                "confidence": 0.0
+            }

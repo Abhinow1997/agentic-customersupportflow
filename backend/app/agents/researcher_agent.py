@@ -25,6 +25,11 @@ from typing import Any
 
 import litellm
 from app.config import get_settings
+from app.services.item_lookup import lookup_item_by_sk
+from app.services.store_sales_lookup import (
+    lookup_purchase_date_by_item_and_email,
+    lookup_store_sales_by_customer_email,
+)
 
 logger = logging.getLogger("agents.researcher")
 settings = get_settings()
@@ -33,7 +38,7 @@ settings = get_settings()
 LLM_MODEL = "gpt-4o-mini"
 
 # System prompt for the Researcher Agent's LLM reasoning
-RESEARCHER_SYSTEM_PROMPT = """You are an expert customer support researcher analyzing product returns.
+RESEARCHER_SYSTEM_PROMPT = """You are an expert Walmart's customer support researcher analyzing product returns.
 
 Your job is to reason through a specific question about a return using the available context.
 
@@ -67,43 +72,522 @@ class ResearcherAgent:
     CRITICAL_QUESTIONS = [
         {
             "id": 1,
-            "question": "Was this item 'Sold & Shipped by Walmart' or a 'Marketplace' seller?",
+            "question": "Has the customer provided a valid receipt, order number, or payment transcript for the returned item?",
+            "key": "proof_of_purchase",
+            "context_keys": ["item_sk", "packaging_condition"],
+        },
+        {
+            "id": 2,
+            "question": "Was the item 'Purchased/Sold/Shipped from a authorized Walmart Store' or a 'Marketplace' seller?",
             "key": "seller_type",
             "context_keys": ["item_sk"],
         },
         {
-            "id": 2,
-            "question": "What is the specific purchase or delivery date?",
+            "id": 3,
+            "question": "What is the specific purchase or delivery date for the returned item?",
             "key": "purchase_date",
             "context_keys": ["item_sk"],
         },
         {
-            "id": 3,
-            "question": "What is the specific category of the item?",
+            "id": 4,
+            "question": "What is the specific category for the returned item?",
             "key": "item_category",
             "context_keys": ["item_sk"],
-        },
-        {
-            "id": 4,
-            "question": "Is the receipt, order number, or the original payment card available and valid?",
-            "key": "proof_of_purchase",
-            "context_keys": ["item_sk", "packaging_condition"],
         },
         {
             "id": 5,
             "question": "Why is the customer returning the item?",
             "key": "return_reason",
             "context_keys": ["packaging_condition", "packaging_factor"],
-        },
+        }
     ]
     
     def __init__(self):
         self.communication_history = []
+
+    def _make_source_check(
+        self,
+        source_name: str,
+        status: str,
+        exact_issue: str,
+        evidence: str = "",
+        confidence: float = 0.0,
+        source_ref: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "source_name": source_name,
+            "status": status,
+            "exact_issue": exact_issue,
+            "evidence": evidence,
+            "confidence": max(0.0, min(1.0, float(confidence))),
+            "source_ref": source_ref,
+            "compliant": status == "compliant",
+        }
+
+    def _aggregate_exact_issue(self, source_checks: list[dict[str, Any]]) -> str:
+        issues = [
+            f"{check['source_name']}: {check['exact_issue']}"
+            for check in source_checks
+            if check.get("status") in ("deviation", "error", "missing") and check.get("exact_issue")
+        ]
+        if issues:
+            return " | ".join(issues)
+        return "No source deviations detected."
+
+    def _normalize_follow_up_answers(
+        self,
+        follow_up_answers: list[dict[str, Any]] | dict[str, Any] | None,
+    ) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        if not follow_up_answers:
+            return normalized
+
+        if isinstance(follow_up_answers, dict):
+            for key, value in follow_up_answers.items():
+                if value is not None:
+                    normalized[str(key)] = str(value).strip()
+            return normalized
+
+        for entry in follow_up_answers:
+            if not isinstance(entry, dict):
+                continue
+            answer = str(entry.get("answer", "")).strip()
+            if not answer:
+                continue
+            if entry.get("key") is not None:
+                normalized[str(entry["key"])] = answer
+            if entry.get("question_id") is not None:
+                normalized[str(entry["question_id"])] = answer
+            if entry.get("question"):
+                normalized[str(entry["question"])] = answer
+        return normalized
+
+    def _normalize_text(self, text: str | None) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip()).lower()
+
+    def _extract_date_phrase(self, remarks: str) -> str:
+        date_patterns = [
+            r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:,\s*\d{2,4})?\b",
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+            r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        ]
+        for pattern in date_patterns:
+            match = re.search(pattern, remarks, flags=re.IGNORECASE)
+            if match:
+                return match.group(0)
+
+        relative_patterns = [
+            "today",
+            "yesterday",
+            "last week",
+            "last month",
+            "this week",
+            "this month",
+            "earlier this year",
+            "a few days ago",
+            "recently",
+        ]
+        remarks_lower = remarks.lower()
+        for phrase in relative_patterns:
+            if phrase in remarks_lower:
+                return phrase
+        return ""
+
+    def _extract_answer_from_remarks(
+        self,
+        q_spec: dict[str, Any],
+        remarks: str,
+        context: dict[str, Any],
+        sales_history: dict[str, Any],
+        sales_lookup: dict[str, Any],
+        item_lookup: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        remarks_clean = remarks.strip()
+        if not remarks_clean:
+            return None
+
+        normalized = self._normalize_text(remarks_clean)
+        q_key = q_spec["key"]
+
+        if q_key == "seller_type":
+            if any(term in normalized for term in ["marketplace", "third-party seller", "3rd party seller"]):
+                return {
+                    "answer": "Marketplace seller",
+                    "confidence": 0.86,
+                    "reasoning": "Customer remarks explicitly mention a marketplace/third-party seller.",
+                    "evidence": remarks_clean,
+                }
+            if any(term in normalized for term in ["sold & shipped by walmart", "sold and shipped by walmart", "sold by walmart"]):
+                return {
+                    "answer": "Sold & Shipped by Walmart",
+                    "confidence": 0.92,
+                    "reasoning": "Customer remarks explicitly mention Walmart fulfillment.",
+                    "evidence": remarks_clean,
+                }
+
+        elif q_key == "purchase_date":
+            date_phrase = self._extract_date_phrase(remarks_clean)
+            if date_phrase:
+                return {
+                    "answer": date_phrase,
+                    "confidence": 0.78,
+                    "reasoning": "Customer remarks include a date reference that can be used as the purchase or delivery date.",
+                    "evidence": remarks_clean,
+                }
+
+        elif q_key == "item_category":
+            item_category = str(item_lookup.get("item_category", "")).strip()
+            item_category_full = str(item_lookup.get("item_category_full", "")).strip()
+            item_name = str(item_lookup.get("item_name", "")).strip()
+            if item_category and item_category.lower() in normalized:
+                return {
+                    "answer": item_category,
+                    "confidence": 0.9,
+                    "reasoning": "Customer remarks explicitly mention the item category.",
+                    "evidence": remarks_clean,
+                }
+            if item_category_full and item_category_full.lower() in normalized:
+                return {
+                    "answer": item_category_full,
+                    "confidence": 0.9,
+                    "reasoning": "Customer remarks explicitly mention the item category.",
+                    "evidence": remarks_clean,
+                }
+            if item_name and item_name.lower() in normalized:
+                return {
+                    "answer": item_category or item_category_full or item_name,
+                    "confidence": 0.8,
+                    "reasoning": "Customer remarks mention the product name tied to the item lookup.",
+                    "evidence": remarks_clean,
+                }
+
+        elif q_key == "proof_of_purchase":
+            if any(
+                term in normalized
+                for term in [
+                    "receipt",
+                    "order number",
+                    "order no",
+                    "order #",
+                    "payment card",
+                    "original payment card",
+                    "invoice",
+                    "proof of purchase",
+                ]
+            ):
+                negative_terms = [
+                    "no receipt",
+                    "without receipt",
+                    "don't have receipt",
+                    "do not have receipt",
+                    "no order number",
+                    "no payment card",
+                ]
+                if any(term in normalized for term in negative_terms):
+                    return {
+                        "answer": "No, the customer indicated the required purchase proof is not available.",
+                        "confidence": 0.84,
+                        "reasoning": "Customer remarks explicitly state the required proof is missing.",
+                        "evidence": remarks_clean,
+                    }
+                return {
+                    "answer": "Yes, the receipt, order number, or original payment card is available and valid.",
+                    "confidence": 0.9,
+                    "reasoning": "Customer remarks explicitly confirm purchase proof availability.",
+                    "evidence": remarks_clean,
+                }
+
+        elif q_key == "return_reason":
+            reason_map = [
+                ("damaged", "Item arrived damaged or packaging was damaged."),
+                ("defective", "Item is defective."),
+                ("wrong size", "Item is the wrong size."),
+                ("wrong item", "Customer received the wrong item."),
+                ("changed mind", "Customer changed their mind."),
+                ("not needed", "Customer no longer needs the item."),
+                ("late delivery", "Delivery arrived too late."),
+                ("missing parts", "Item is missing parts."),
+                ("broken", "Item is broken."),
+                ("too small", "Item is too small."),
+                ("too large", "Item is too large."),
+            ]
+            for phrase, answer in reason_map:
+                if phrase in normalized:
+                    return {
+                        "answer": answer,
+                        "confidence": 0.84,
+                        "reasoning": "Customer remarks describe the return reason directly.",
+                        "evidence": remarks_clean,
+                    }
+
+            if len(normalized) > 0:
+                return {
+                    "answer": remarks_clean,
+                    "confidence": 0.55,
+                    "reasoning": "Customer remarks contain a return explanation that can be used as the base reason.",
+                    "evidence": remarks_clean,
+                }
+
+        return None
+
+    def _analyze_customer_remarks(
+        self,
+        customer_remarks: str,
+        sales_history: dict[str, Any],
+        sales_lookup: dict[str, Any],
+        item_lookup: dict[str, Any],
+    ) -> dict[str, Any]:
+        remarks = (customer_remarks or "").strip()
+        analysis: dict[str, Any] = {
+            "provided": bool(remarks),
+            "summary": "",
+            "raw_remarks": remarks,
+            "answers_by_key": {},
+            "covered_questions": [],
+            "missing_questions": [],
+            "follow_up_questions": [],
+            "coverage": {"answered": 0, "missing": len(self.CRITICAL_QUESTIONS)},
+        }
+
+        if not remarks:
+            analysis["summary"] = "No customer remarks were provided."
+            analysis["missing_questions"] = [
+                {
+                    "question_id": q["id"],
+                    "question": q["question"],
+                    "key": q["key"],
+                    "needed": True,
+                    "reason": "No customer remarks provided.",
+                }
+                for q in self.CRITICAL_QUESTIONS
+            ]
+            analysis["follow_up_questions"] = [
+                {
+                    "question_id": q["id"],
+                    "question": q["question"],
+                    "key": q["key"],
+                    "reason": "No customer remarks provided.",
+                }
+                for q in self.CRITICAL_QUESTIONS
+            ]
+            return analysis
+
+        for q_spec in self.CRITICAL_QUESTIONS:
+            extracted = self._extract_answer_from_remarks(
+                q_spec=q_spec,
+                remarks=remarks,
+                context={},
+                sales_history=sales_history,
+                sales_lookup=sales_lookup,
+                item_lookup=item_lookup,
+            )
+            if extracted:
+                analysis["answers_by_key"][q_spec["key"]] = {
+                    **extracted,
+                    "question_id": q_spec["id"],
+                    "question": q_spec["question"],
+                    "answer_source": "customer_remarks",
+                }
+                analysis["covered_questions"].append(
+                    {
+                        "question_id": q_spec["id"],
+                        "question": q_spec["question"],
+                        "answer": extracted["answer"],
+                        "answer_source": "customer_remarks",
+                    }
+                )
+            else:
+                analysis["missing_questions"].append(
+                    {
+                        "question_id": q_spec["id"],
+                        "question": q_spec["question"],
+                        "key": q_spec["key"],
+                        "needed": True,
+                        "reason": "Customer remarks did not provide enough information.",
+                    }
+                )
+                analysis["follow_up_questions"].append(
+                    {
+                        "question_id": q_spec["id"],
+                        "question": q_spec["question"],
+                        "key": q_spec["key"],
+                        "reason": "Customer remarks did not provide enough information.",
+                    }
+                )
+
+        analysis["coverage"] = {
+            "answered": len(analysis["covered_questions"]),
+            "missing": len(analysis["missing_questions"]),
+        }
+        if analysis["covered_questions"]:
+            answered_names = ", ".join(
+                f"Q{item['question_id']}" for item in analysis["covered_questions"]
+            )
+        else:
+            answered_names = "none"
+        analysis["summary"] = (
+            f"Customer remarks covered {analysis['coverage']['answered']} "
+            f"of {len(self.CRITICAL_QUESTIONS)} required questions ({answered_names})."
+        )
+        return analysis
+
+    def _question_source_checks(
+        self,
+        q_key: str,
+        remarks_answer: dict[str, Any] | None,
+        sales_history: dict[str, Any],
+        sales_lookup: dict[str, Any],
+        item_lookup: dict[str, Any],
+        return_reason: str,
+        follow_up_answer: str,
+        validation_result: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        checks: list[dict[str, Any]] = []
+
+        if remarks_answer:
+            checks.append(
+                self._make_source_check(
+                    source_name="CUSTOMER_REMARKS",
+                    status="compliant",
+                    exact_issue="Customer remarks supplied the base answer for this question.",
+                    evidence=remarks_answer.get("evidence", remarks_answer.get("answer", "")),
+                    confidence=remarks_answer.get("confidence", 0.0),
+                    source_ref="request.customer_remarks",
+                )
+            )
+
+        if q_key == "seller_type":
+            checks.append(
+                self._make_source_check(
+                    source_name=sales_history.get("source_name", "STORE_SALES"),
+                    status=sales_history.get("compliance_status", "missing"),
+                    exact_issue=(
+                        "Seller channel is inferred from the customer/item sale history."
+                        if sales_history.get("valid")
+                        else sales_history.get("exact_issue", sales_history.get("note", ""))
+                    ),
+                    evidence=sales_history.get("evidence", sales_history.get("note", "")),
+                    confidence=sales_history.get("confidence", 0.0),
+                    source_ref="Snowflake.STORE_SALES",
+                )
+            )
+        if q_key == "purchase_date":
+            checks.append(
+                self._make_source_check(
+                    source_name=sales_history.get("source_name", "STORE_SALES"),
+                    status=sales_history.get("compliance_status", "missing"),
+                    exact_issue=sales_history.get("exact_issue", sales_history.get("note", "")),
+                    evidence=sales_history.get("note", ""),
+                    confidence=sales_history.get("confidence", 0.0),
+                    source_ref="Snowflake.STORE_SALES",
+                )
+            )
+            checks.append(
+                self._make_source_check(
+                    source_name=sales_lookup.get("source_name", "STORE_SALES"),
+                    status=sales_lookup.get("compliance_status", "missing"),
+                    exact_issue=sales_lookup.get("exact_issue", sales_lookup.get("note", "")),
+                    evidence=sales_lookup.get("evidence", sales_lookup.get("note", "")),
+                    confidence=sales_lookup.get("confidence", 0.0),
+                    source_ref="Snowflake.STORE_SALES",
+                )
+            )
+        if q_key == "item_category":
+            checks.append(
+                self._make_source_check(
+                    source_name=item_lookup.get("source_name", "ITEM"),
+                    status=item_lookup.get("compliance_status", "missing"),
+                    exact_issue=item_lookup.get("exact_issue", item_lookup.get("note", "")),
+                    evidence=item_lookup.get("evidence", item_lookup.get("note", "")),
+                    confidence=item_lookup.get("confidence", 0.0),
+                    source_ref="Snowflake.ITEM",
+                )
+            )
+        if q_key == "proof_of_purchase":
+            checks.append(
+                self._make_source_check(
+                    source_name=sales_history.get("source_name", "STORE_SALES"),
+                    status=sales_history.get("compliance_status", "missing"),
+                    exact_issue=(
+                        "Order history exists and supports proof-of-purchase availability."
+                        if sales_history.get("valid")
+                        else sales_history.get("exact_issue", sales_history.get("note", ""))
+                    ),
+                    evidence=sales_history.get("evidence", sales_history.get("note", "")),
+                    confidence=sales_history.get("confidence", 0.0),
+                    source_ref="Snowflake.STORE_SALES",
+                )
+            )
+        if q_key == "return_reason":
+            if return_reason.strip():
+                checks.append(
+                    self._make_source_check(
+                        source_name="CUSTOMER_INPUT",
+                        status="compliant",
+                        exact_issue="Customer supplied a return reason in the request.",
+                        evidence=return_reason.strip(),
+                        confidence=0.9,
+                        source_ref="request.return_reason",
+                    )
+                )
+            else:
+                checks.append(
+                    self._make_source_check(
+                        source_name="CUSTOMER_INPUT",
+                        status="missing",
+                        exact_issue="No return reason was supplied in the request.",
+                        evidence="",
+                        confidence=0.0,
+                        source_ref="request.return_reason",
+                    )
+                )
+
+        if follow_up_answer.strip():
+            checks.append(
+                self._make_source_check(
+                    source_name="CUSTOMER_FOLLOW_UP",
+                    status="compliant",
+                    exact_issue="Customer follow-up answer supplied for this question.",
+                    evidence=follow_up_answer.strip(),
+                    confidence=0.88,
+                    source_ref="request.follow_up_answers",
+                )
+            )
+        elif q_key not in ("return_reason",) and not remarks_answer:
+            checks.append(
+                self._make_source_check(
+                    source_name="CUSTOMER_FOLLOW_UP",
+                    status="missing",
+                    exact_issue="No follow-up answer was provided for this question.",
+                    evidence="",
+                    confidence=0.0,
+                    source_ref="request.follow_up_answers",
+                )
+            )
+
+        checks.append(
+            self._make_source_check(
+                source_name=validation_result.get("source_name", "POLICY"),
+                status=validation_result.get(
+                    "compliance_status",
+                    "compliant" if validation_result.get("valid") else "deviation",
+                ),
+                exact_issue=validation_result.get("exact_issue", validation_result.get("note", "")),
+                evidence=validation_result.get("evidence", ""),
+                confidence=validation_result.get("confidence", 0.0),
+                source_ref=validation_result.get("policy_ref", ""),
+            )
+        )
+
+        return checks
         
     async def investigate_return(
         self, 
         item_context: dict[str, Any],
-        policy_agent: Any  # PolicyAgent instance
+        policy_agent: Any,  # PolicyAgent instance
+        customer_email: str | None = None,
+        customer_remarks: str | None = None,
+        follow_up_answers: list[dict[str, Any]] | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Main investigation loop: gather answers to all 5 questions
@@ -125,6 +609,58 @@ class ResearcherAgent:
         logger.info("🔬 RESEARCHER AGENT: Beginning investigation")
         logger.info(f"   Context: Item SK {item_context['item_sk']}, "
                    f"Packaging: {item_context['packaging_condition']}")
+        return_reason = (customer_remarks or item_context.get("customer_remarks") or item_context.get("return_reason", "")).strip()
+        follow_up_answer_map = self._normalize_follow_up_answers(follow_up_answers)
+
+        sales_history = {}
+        sales_lookup = {}
+        item_lookup = {}
+        if customer_email:
+            sales_history = lookup_store_sales_by_customer_email(customer_email)
+            sales_lookup = lookup_purchase_date_by_item_and_email(
+                item_sk=int(item_context["item_sk"]),
+                customer_email=customer_email,
+            )
+            item_lookup = lookup_item_by_sk(int(item_context["item_sk"]))
+            logger.info(
+                "   STORE_SALES history: %s | %s",
+                sales_history.get("valid"),
+                sales_history.get("note"),
+            )
+            logger.info(
+                "   STORE_SALES lookup: %s | %s",
+                sales_lookup.get("valid"),
+                sales_lookup.get("note"),
+            )
+            logger.info(
+                "   ITEM lookup: %s | %s",
+                item_lookup.get("valid"),
+                item_lookup.get("note"),
+            )
+            if not sales_lookup.get("valid"):
+                logger.info("   STORE_SALES exact issue: %s", sales_lookup.get("exact_issue") or sales_lookup.get("note"))
+
+        resolved_context = {**item_context, **sales_history, **sales_lookup, **item_lookup}
+        if customer_email:
+            resolved_context["customer_email"] = customer_email
+        if return_reason:
+            resolved_context["customer_remarks"] = return_reason
+
+        remarks_analysis = self._analyze_customer_remarks(
+            customer_remarks=return_reason,
+            sales_history=sales_history,
+            sales_lookup=sales_lookup,
+            item_lookup=item_lookup,
+        )
+        logger.info("   Customer remarks provided: %s", remarks_analysis.get("provided"))
+        logger.info("   Customer remarks summary: %s", remarks_analysis.get("summary"))
+        if remarks_analysis.get("follow_up_questions"):
+            logger.info("   Follow-up questions needed: %s", len(remarks_analysis["follow_up_questions"]))
+            for follow_up in remarks_analysis["follow_up_questions"]:
+                logger.info("      - Q%s: %s", follow_up.get("question_id", "?"), follow_up.get("question", ""))
+        if follow_up_answer_map:
+            logger.info("   Follow-up answers provided: %s", len(follow_up_answer_map))
+        awaiting_user_input = bool(remarks_analysis.get("follow_up_questions")) and not bool(follow_up_answer_map)
         
         questions_answered = []
         exchanges = []
@@ -135,42 +671,133 @@ class ResearcherAgent:
             logger.info(f"📋 Question {q_spec['id']}: {q_spec['question']}")
             
             # Step 1: Researcher uses LLM to formulate initial answer
-            initial_answer = await self._formulate_answer_llm(q_spec, item_context)
-            logger.info(f"   LLM Answer: {initial_answer['answer']}")
-            logger.info(f"   LLM Confidence: {initial_answer['confidence']:.2f}")
-            logger.info(f"   LLM Reasoning: {initial_answer['reasoning']}")
+            remarks_answer = remarks_analysis.get("answers_by_key", {}).get(q_spec["key"])
+            follow_up_answer = (
+                follow_up_answer_map.get(q_spec["key"])
+                or follow_up_answer_map.get(str(q_spec["id"]))
+                or follow_up_answer_map.get(q_spec["question"])
+                or ""
+            )
+            if remarks_answer:
+                initial_answer = {
+                    "answer": remarks_answer["answer"],
+                    "confidence": float(remarks_answer.get("confidence", 0.8)),
+                    "reasoning": remarks_answer.get("reasoning", "Customer remarks supplied the answer."),
+                }
+            elif follow_up_answer:
+                initial_answer = {
+                    "answer": follow_up_answer,
+                    "confidence": 0.82,
+                    "reasoning": "Customer provided a follow-up answer for this question.",
+                }
+            elif q_spec["key"] == "purchase_date" and sales_lookup.get("valid"):
+                initial_answer = {
+                    "answer": sales_lookup.get("purchase_date", "Unknown"),
+                    "confidence": float(sales_lookup.get("confidence", 0.9)),
+                    "reasoning": sales_lookup.get(
+                        "note",
+                        "Confirmed through STORE_SALES lookup.",
+                    ),
+                }
+            elif q_spec["key"] == "item_category" and item_lookup.get("valid"):
+                initial_answer = {
+                    "answer": item_lookup.get("item_category", "Unknown"),
+                    "confidence": float(item_lookup.get("confidence", 0.9)),
+                    "reasoning": item_lookup.get(
+                        "note",
+                        "Confirmed through ITEM lookup.",
+                    ),
+                }
+            else:
+                if awaiting_user_input:
+                    initial_answer = {
+                        "answer": "Pending customer input",
+                        "confidence": 0.0,
+                        "reasoning": "Awaiting a customer follow-up response for this question.",
+                    }
+                else:
+                    initial_answer = await self._formulate_answer_llm(q_spec, resolved_context)
+            logger.info(f"   Initial Answer: {initial_answer['answer']}")
+            logger.info(f"   Initial Confidence: {initial_answer['confidence']:.2f}")
+            logger.info(f"   Initial Reasoning: {initial_answer['reasoning']}")
             
             # Step 2: Ask Policy Agent to validate
             policy_query = self._build_policy_query(q_spec, initial_answer)
             logger.info(f"   Policy Query: {policy_query}")
-            
-            validation_result = await policy_agent.validate(
-                question=q_spec["question"],
-                proposed_answer=initial_answer["answer"],
-                query=policy_query,
-                context=item_context
-            )
+
+            if initial_answer["answer"] == "Pending customer input":
+                validation_result = {
+                    "valid": False,
+                    "compliance_status": "pending",
+                    "exact_issue": "Awaiting customer follow-up answer before policy validation.",
+                    "evidence": "",
+                    "note": "Awaiting customer follow-up answer before policy validation.",
+                    "confidence": 0.0,
+                    "policy_ref": "pending",
+                    "source_name": "CUSTOMER_FOLLOW_UP",
+                    "retrieved_policies": [],
+                }
+            else:
+                validation_result = await policy_agent.validate(
+                    question=q_spec["question"],
+                    proposed_answer=initial_answer["answer"],
+                    query=policy_query,
+                    context=resolved_context
+                )
             
             logger.info(f"   Policy Validation: {validation_result['valid']}")
             if validation_result.get("note"):
                 logger.info(f"   Validation Note: {validation_result['note']}")
-            
+            if validation_result.get("exact_issue"):
+                logger.info(f"   Policy Exact Issue: {validation_result['exact_issue']}")
+
+            source_checks = self._question_source_checks(
+                q_key=q_spec["key"],
+                remarks_answer=remarks_answer,
+                sales_history=sales_history,
+                sales_lookup=sales_lookup,
+                item_lookup=item_lookup,
+                return_reason=return_reason,
+                follow_up_answer=follow_up_answer,
+                validation_result=validation_result,
+            )
+
             # Step 3: Researcher adjusts based on validation
             final_answer, final_confidence = self._adjust_answer(
                 initial_answer,
                 validation_result
             )
-            
+
             logger.info(f"   ✓ Final Answer: {final_answer}")
             logger.info(f"   Final Confidence: {final_confidence:.2f}")
-            
+            logger.info(f"   Source Exact Issue: {self._aggregate_exact_issue(source_checks)}")
+
+            if remarks_answer:
+                answer_source = "customer_remarks"
+            elif q_spec["key"] == "purchase_date" and sales_lookup.get("valid"):
+                answer_source = "store_sales"
+            elif q_spec["key"] == "item_category" and item_lookup.get("valid"):
+                answer_source = "item_lookup"
+            elif q_spec["key"] in ("seller_type", "proof_of_purchase") and sales_history.get("valid"):
+                answer_source = "store_sales"
+            elif initial_answer["answer"] == "Pending customer input":
+                answer_source = "pending_user_input"
+            else:
+                answer_source = "llm"
+
             # Record the question-answer
             questions_answered.append({
                 "question": q_spec["question"],
                 "answer": final_answer,
                 "confidence": final_confidence,
-                "validated": validation_result["valid"],
+                "validated": all(
+                    check["status"] in ("compliant", "insufficient_evidence")
+                    for check in source_checks
+                ),
                 "validation_note": validation_result.get("note", ""),
+                "exact_issue": self._aggregate_exact_issue(source_checks),
+                "source_checks": source_checks,
+                "answer_source": answer_source,
             })
             
             # Record the communication exchange
@@ -182,6 +809,8 @@ class ResearcherAgent:
                 "policy_validation": validation_result,
                 "final_answer": final_answer,
                 "confidence": final_confidence,
+                "exact_issue": self._aggregate_exact_issue(source_checks),
+                "source_checks": source_checks,
             })
         
         # ── Compute overall assessment ────────────────────────────────────
@@ -189,6 +818,7 @@ class ResearcherAgent:
         avg_confidence = sum(qa["confidence"] for qa in questions_answered) / len(questions_answered)
         
         assessment_complete = all_validated and avg_confidence >= 0.7
+        awaiting_follow_up = awaiting_user_input
         
         logger.info("")
         logger.info(f"🎯 INVESTIGATION COMPLETE")
@@ -201,6 +831,13 @@ class ResearcherAgent:
             "exchanges": exchanges,
             "assessment_complete": assessment_complete,
             "assessment_confidence": avg_confidence,
+            "sales_history": sales_history,
+            "sales_validation": sales_lookup,
+            "item_validation": item_lookup,
+            "resolved_context": resolved_context,
+            "remarks_analysis": remarks_analysis,
+            "follow_up_questions": remarks_analysis.get("follow_up_questions", []),
+            "awaiting_follow_up": awaiting_follow_up,
         }
     
     async def _formulate_answer_llm(
@@ -437,10 +1074,4 @@ Respond with ONLY the JSON object."""
                 min(1.0, initial_answer["confidence"] + 0.1)  # Boost confidence
             )
         else:
-            # Policy suggests adjustment
-            note = validation_result.get("note", "")
-            if note:
-                adjusted = f"{initial_answer['answer']} (Policy note: {note})"
-                return (adjusted, initial_answer["confidence"] * 0.8)  # Lower confidence
-            else:
-                return (initial_answer["answer"], initial_answer["confidence"] * 0.9)
+            return (initial_answer["answer"], initial_answer["confidence"] * 0.8)

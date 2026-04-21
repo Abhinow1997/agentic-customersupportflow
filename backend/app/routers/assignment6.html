@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Returns: RL Architecture</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0f19; /* Deep slate/blue */
+            color: #e2e8f0;
+        }
+        
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Custom Mermaid Overrides for dark theme */
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+        
+        /* Subgraph styling */
+        .cluster rect {
+            fill: rgba(15, 23, 42, 0.5) !important;
+            stroke: rgba(148, 163, 184, 0.2) !important;
+            stroke-width: 1px !important;
+            rx: 12px !important;
+        }
+        .cluster-label text {
+            fill: #94a3b8 !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            font-family: 'JetBrains Mono', monospace !important;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col p-6 gap-6">
+
+    <!-- Header -->
+    <header class="flex flex-col gap-2">
+        <h1 class="text-3xl font-bold text-white tracking-tight">Agentic Returns: Actor-Critic Architecture</h1>
+        <p class="text-slate-400 max-w-3xl">
+            This diagram maps the Python/FastAPI backend workflow to a Reinforcement Learning (RL) paradigm. 
+            The system acts as a Markov Decision Process where the goal is to reach a terminal state with maximum confidence while avoiding negative reward penalties (human intervention).
+        </p>
+    </header>
+
+    <!-- Main Layout -->
+    <main class="flex flex-col lg:flex-row gap-6 flex-1">
+        
+        <!-- Left: Interactive Diagram -->
+        <div class="glass-panel rounded-2xl p-6 flex-1 flex items-center justify-center overflow-hidden shadow-2xl relative">
+            <div class="absolute top-4 left-4 flex gap-2">
+                <span class="px-3 py-1 text-xs font-bold uppercase tracking-wider bg-slate-800 text-slate-300 rounded-full border border-slate-700">Live Architecture</span>
+            </div>
+            
+            <div class="mermaid w-full text-center mt-8">
+                %%{init: {
+                    'theme': 'base',
+                    'themeVariables': {
+                        'primaryTextColor': '#ffffff',
+                        'lineColor': '#64748b',
+                        'fontFamily': 'Inter, sans-serif',
+                        'fontSize': '14px'
+                    },
+                    'flowchart': {
+                        'nodeSpacing': 60,
+                        'rankSpacing': 80,
+                        'curve': 'basis'
+                    }
+                }}%%
+                flowchart LR
+                    subgraph S1 ["1. STATE SPACE INITIALIZATION (S_t)"]
+                        direction TB
+                        Input(["Raw Customer Intake<br/>(Email/Voicemail)"]) --> Extract["Semantic Extraction"]
+                        Extract --> DB[("Snowflake DB<br/>Store Sales & Item")]
+                        DB --> Math["Native Python Math<br/>(Deterministic Override)"]
+                        Math --> Context["Resolved Context Space"]
+                    end
+
+                    subgraph S2 ["2. ACTOR-CRITIC RL LOOP"]
+                        direction TB
+                        Actor{"ACTOR<br/>Researcher Agent"} 
+                        Critic["CRITIC & ENVIRONMENT<br/>Policy Agent (RAG)"]
+                        
+                        Actor -- "Action (A_t):<br/>Propose Answer" --> Critic
+                        Critic -. "Reward (R_t):<br/>+1 Valid / -1 Deviation" .-> Actor
+                    end
+
+                    subgraph S3 ["3. OPTIMIZATION & TERMINAL STATE"]
+                        direction TB
+                        Human{{"Human-in-the-Loop<br/>(Negative Reward / Penalty)"}}
+                        Terminal((("Terminal State<br/>Calculate Net Loss & Issue Ticket")))
+                    end
+
+                    Context ==> Actor
+                    
+                    Critic -- "Deviation / Missing Data" --> Human
+                    Human -- "New Context Injected" --> Actor
+                    
+                    Critic ==>|All Qs Validated &<br/>Avg Confidence > 0.7| Terminal
+
+                    %% Styling Classes
+                    classDef state fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#d1fae5
+                    classDef actor fill:#78350f,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
+                    classDef critic fill:#1e3a8a,stroke:#3b82f6,stroke-width:2px,color:#dbeafe
+                    classDef penalty fill:#7f1d1d,stroke:#ef4444,stroke-width:2px,color:#fee2e2
+                    classDef terminal fill:#4c1d95,stroke:#8b5cf6,stroke-width:3px,color:#ede9fe
+                    classDef db fill:#0f172a,stroke:#475569,stroke-width:2px,color:#e2e8f0
+
+                    class Input,Extract,Math,Context state
+                    class DB db
+                    class Actor actor
+                    class Critic critic
+                    class Human penalty
+                    class Terminal terminal
+            </div>
+        </div>
+
+        <!-- Right: RL Legend & Explanation -->
+        <div class="flex flex-col gap-4 w-full lg:w-96 shrink-0">
+            
+            <div class="glass-panel rounded-2xl p-5 border-t-4 border-t-emerald-500">
+                <h3 class="text-sm font-bold uppercase tracking-widest text-emerald-400 mb-2 mono">1. State (S_t)</h3>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    Before the AI makes decisions, the system gathers deterministic data (Snowflake DB, native date math). This grounds the LLM, preventing hallucinations and setting a perfect initial observation space.
+                </p>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border-t-4 border-t-amber-500">
+                <h3 class="text-sm font-bold uppercase tracking-widest text-amber-400 mb-2 mono">2. Actor (Policy/Agent)</h3>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    The <strong>Researcher Agent</strong> acts as the RL Actor. It observes the State and takes an Action: hypothesizing an answer to one of the 5 Critical Questions based on context.
+                </p>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border-t-4 border-t-blue-500">
+                <h3 class="text-sm font-bold uppercase tracking-widest text-blue-400 mb-2 mono">3. Critic (Environment)</h3>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    The <strong>Policy Agent</strong> acts as the Critic. It queries real Walmart policies (RAG) to validate the Actor's hypothesis. It provides the Reward Signal: +0.1 confidence boost for passing, -20% confidence penalty for failing.
+                </p>
+            </div>
+
+            <div class="glass-panel rounded-2xl p-5 border-t-4 border-t-red-500">
+                <h3 class="text-sm font-bold uppercase tracking-widest text-red-400 mb-2 mono">4. Optimization & Penalty</h3>
+                <p class="text-sm text-slate-300 leading-relaxed">
+                    If the Critic flags insufficient data, the workflow pauses for human follow-up. In an RL context, human intervention incurs a severe penalty. Over time, Policy Gradients learn to minimize this path.
+                </p>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // Initialize Mermaid
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+</body>
+</html>

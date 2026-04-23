@@ -179,7 +179,6 @@
   .brand-content {
     position: relative;
     z-index: 1;
-    max-width: 100%;
   }
 
   .wordmark {
@@ -213,29 +212,11 @@
 
   .brand-main {
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.35fr);
+    grid-template-columns: minmax(220px, 1fr) minmax(320px, 1.25fr);
     gap: 28px;
     align-items: center;
-    max-width: 100%;
   }
-
-  .hero-graphic {
-    width: 100%;
-    padding: 18px 18px 10px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 20px;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
-    backdrop-filter: blur(6px);
-    justify-self: end;
-  }
-
-  .hero-graphic img {
-    display: block;
-    width: 100%;
-    height: auto;
-  }
-
+ 
   .feature-list {
     display: flex;
     flex-direction: column;
@@ -256,6 +237,23 @@
     border-radius: 50%;
     background: #ffc220; /* Walmart Spark Yellow */
     flex-shrink: 0;
+  }
+
+  .hero-graphic {
+    justify-self: end;
+    width: 100%;
+    padding: 18px 18px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(6px);
+  }
+
+  .hero-graphic img {
+    display: block;
+    width: 100%;
+    height: auto;
   }
 
   .brand-footer {

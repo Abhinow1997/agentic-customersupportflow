@@ -32,6 +32,97 @@
   let itemDetails       = null;      // full item object from FastAPI
   let returnQty         = 1;
 
+  // ── Recent Orders (Dynamic) ───────────────────────────────────────────────
+  let recentOrders = [];
+  let filteredOrders = [];
+  let ordersLoading = false;
+  let ordersError = '';
+  let dateFilter = 'all'; // 'all' | '7'
+
+  onMount(() => {
+    fetchRecentOrders(false);
+  });
+
+  async function fetchRecentOrders(forceRefresh = false) {
+    if (!forceRefresh) {
+      const cached = sessionStorage.getItem('recentOrdersCache');
+      if (cached) {
+        try {
+          recentOrders = JSON.parse(cached);
+          applyDateFilter();
+          return;
+        } catch (e) {
+          console.warn('Failed to parse cached orders');
+        }
+      }
+    }
+    
+    ordersLoading = true;
+    ordersError = '';
+    try {
+      // NOTE: Replace this endpoint path if yours differs
+      const res = await fetch(`${FASTAPI}/api/recent_orders`);
+      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+      const data = await res.json();
+      
+      // Handle various response structures gracefully
+      recentOrders = data.orders || data.data || data; 
+      
+      if (Array.isArray(recentOrders)) {
+        sessionStorage.setItem('recentOrdersCache', JSON.stringify(recentOrders));
+        applyDateFilter();
+      } else {
+        recentOrders = [];
+      }
+    } catch (e) {
+      ordersError = 'Failed to load recent orders: ' + e.message;
+    } finally {
+      ordersLoading = false;
+    }
+  }
+
+  function applyDateFilter() {
+    if (dateFilter === 'all') {
+      filteredOrders = recentOrders;
+      return;
+    }
+    const days = parseInt(dateFilter);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    
+    filteredOrders = recentOrders.filter(o => {
+      const dateStr = o.PURCHASE_DATE || o.purchase_date;
+      if (!dateStr) return true; // Include if no date exists
+      const d = new Date(dateStr);
+      return d >= cutoff;
+    });
+  }
+
+  $: dateFilter, applyDateFilter();
+
+  async function selectRecentOrder(order) {
+    // 1. Set context to return ticket
+    if (ticketType !== 'return') {
+      setTicketType('return');
+    }
+
+    // 2. Fetch Customer
+    const email = order.C_EMAIL_ADDRESS || order.c_email_address || '';
+    if (email) {
+      lookupEmail = email;
+      await lookupCustomer();
+    }
+
+    // 3. Fetch Item (Assumes backend includes ITEM_SK or similar key in the query output)
+    const sk = order.ITEM_SK || order.I_ITEM_SK || order.SS_ITEM_SK || order.item_sk || order.i_item_sk || order.ss_item_sk || '';
+    if (sk) {
+      itemLookupSk = sk;
+      await lookupItem();
+    }
+    
+    // Removed auto-navigation to step 2 so the agent can review before proceeding manually
+  }
+
   // ── Package assessment ────────────────────────────────────────────────────
   let packagingCondition = '';       // one of PACKAGING_CONDITIONS ids
   let assessmentLoading  = false;
@@ -45,6 +136,17 @@
   let activeFollowUpAnswer = '';
   let followUpError      = '';
   $: assessmentResultJson = assessmentResult ? JSON.stringify(assessmentResult, null, 2) : '';
+
+  let assessmentLoadingStep = 0;
+  let assessmentInterval;
+  const ASSESSMENT_STEPS = [
+    "Initializing Researcher Agent...",
+    "Scanning corporate return policies and constraints...",
+    "Cross-referencing item details with customer history...",
+    "Analyzing customer remarks against policy logic...",
+    "Generating dynamic policy-validation questions...",
+    "Finalizing multi-agent assessment..."
+  ];
 
   // ── Decision logging ─────────────────────────────────────────────────────
   let decisionLogging = false;
@@ -307,6 +409,11 @@
     assessmentLoading = true;
     assessmentError = '';
     assessmentComplete = false;
+    assessmentLoadingStep = 0;
+
+    assessmentInterval = setInterval(() => {
+      assessmentLoadingStep = Math.min(assessmentLoadingStep + 1, ASSESSMENT_STEPS.length - 1);
+    }, 1500);
 
     try {
       const res = await fetch(`${FASTAPI}/api/access_item_return`, {
@@ -343,6 +450,7 @@
     } catch (e) {
       assessmentError = e.message;
     } finally {
+      clearInterval(assessmentInterval);
       assessmentLoading = false;
     }
   }
@@ -523,6 +631,13 @@
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function truncate(str, n) { return str && str.length > n ? str.slice(0, n) + '…' : (str ?? ''); }
+  
+  function formatDateStr(dStr) {
+    if (!dStr) return '—';
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return dStr;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
 </script>
 
 <div class="create-page">
@@ -692,8 +807,6 @@
               {/if}
             {/if}
 
-
-
             {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
 
             <div class="step-actions">
@@ -704,6 +817,7 @@
             </div>
 
           {:else}
+            <!-- RETURN PATH -->
             <div class="form-section">
               <div class="section-title">Customer Lookup</div>
               <div class="lookup-row">
@@ -749,11 +863,67 @@
                 </div>
               {/if}
             </div>
-
-            <div class="step-actions">
+            
+            <div class="step-actions" style="margin-bottom: 16px;">
               <div></div>
               <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>Next: Item & Assessment →</button>
             </div>
+
+            <!-- Recent Orders Integration -->
+            <div class="form-section">
+              <div class="section-title-row">
+                <div class="section-title" style="margin: 0;">Recent Orders <span class="section-sub">— click to auto-fill ticket details</span></div>
+                
+                <div class="recent-orders-controls">
+                  <div class="chip-group">
+                    <button class="chip" class:selected={dateFilter === 'all'} on:click={() => dateFilter = 'all'}>All Dates</button>
+                    <button class="chip" class:selected={dateFilter === '7'} on:click={() => dateFilter = '7'}>Last 7 Days</button>
+                  </div>
+                  <button class="btn btn-ghost btn-sm" on:click={() => fetchRecentOrders(true)} disabled={ordersLoading}>
+                    {#if ordersLoading}<span class="spinner-sm"></span>{:else}↻ Refresh{/if}
+                  </button>
+                </div>
+              </div>
+
+              {#if ordersError}
+                <div class="error-banner mb-12">⚠ {ordersError}</div>
+              {/if}
+
+              {#if ordersLoading && !filteredOrders.length}
+                <div style="padding: 30px; text-align: center; color: var(--text-muted);">
+                  <span class="spinner-sm"></span> Loading recent orders from Snowflake...
+                </div>
+              {:else if filteredOrders.length > 0}
+                <div class="recent-orders-list">
+                  {#each filteredOrders as order}
+                    <button class="recent-order-card" on:click={() => selectRecentOrder(order)}>
+                      <div class="ro-header">
+                        <span class="ro-date">{formatDateStr(order.PURCHASE_DATE || order.purchase_date)}</span>
+                        <span class="ro-price">${parseFloat(order.sales_price || order.SALES_PRICE || 0).toFixed(2)}</span>
+                      </div>
+                      <div class="ro-customer">
+                        <strong>{order.CUSTOMER_NAME || order.customer_name}</strong> 
+                        <span class="ro-email">{order.C_EMAIL_ADDRESS || order.c_email_address}</span>
+                      </div>
+                      <div class="ro-body">
+                        <div class="ro-name">{truncate(order.I_PRODUCT_NAME || order.i_product_name, 45)}</div>
+                        <div class="ro-meta">
+                          <span class="ro-category">{order.I_CATEGORY || order.i_category}</span>
+                          {#if order.I_ITEM_SK || order.ITEM_SK || order.SS_ITEM_SK || order.i_item_sk || order.item_sk || order.ss_item_sk}
+                            <span class="ro-dot">·</span>
+                            <span class="ro-sk">SK {order.I_ITEM_SK || order.ITEM_SK || order.SS_ITEM_SK || order.i_item_sk || order.item_sk || order.ss_item_sk}</span>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="ro-arrow">→</div>
+                    </button>
+                  {/each}
+                </div>
+              {:else}
+                <div class="empty-state">No recent orders found matching the filter.</div>
+              {/if}
+            </div>
+
           {/if}
 
 
@@ -842,6 +1012,27 @@
             {/if}
           </div>
 
+          <!-- MISSING PACKAGING ASSESSMENT UI BLOCK ADDED BACK HERE -->
+          {#if itemDetails}
+            <div class="form-section">
+              <div class="section-title">Packaging Assessment <span class="req">*</span></div>
+              <div class="packaging-grid">
+                {#each PACKAGING_CONDITIONS as pkg}
+                  <button 
+                    class="pkg-card pkg-{pkg.color}" 
+                    class:selected={packagingCondition === pkg.id} 
+                    on:click={() => packagingCondition = pkg.id}
+                  >
+                    <div class="pkg-card-top">
+                      <span class="pkg-label">{pkg.label}</span>
+                    </div>
+                    <div class="pkg-desc">{pkg.desc}</div>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           <div class="form-section">
             <div class="section-title">
               Return Decision Prep
@@ -859,13 +1050,23 @@
                 />
                 <div class="field-hint">These notes are used as the researcher’s starting evidence before policy validation.</div>
               </div>
-              <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={assessmentLoading || !itemDetails}>
-                {#if assessmentLoading}
-                  <span class="spinner-sm"></span> Analyzing...
-                {:else}
+              
+              {#if assessmentLoading}
+                <div class="agent-loading-banner">
+                  <div class="agent-spinner-ring">
+                    <div class="agent-spinner-core"></div>
+                  </div>
+                  <div class="agent-loading-content">
+                    <div class="agent-loading-title">Multi-Agent Assessment Running</div>
+                    <div class="agent-loading-step">{ASSESSMENT_STEPS[assessmentLoadingStep]}</div>
+                  </div>
+                </div>
+              {:else}
+                <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={!itemDetails || !packagingCondition}>
                   ✦ Analyze Return
-                {/if}
-              </button>
+                </button>
+              {/if}
+
               {#if assessmentError}
                 <div class="error-banner mt-12">⚠ {assessmentError}</div>
               {/if}
@@ -918,21 +1119,53 @@
                 {/if}
 
                 {#if assessmentResult.awaitingFollowUp && followUpMode && followUpQuestions?.length}
-                  <div class="result-block follow-up-panel">
-                    <div class="result-block-title">Still Needed</div>
+                  <div class="agent-request-panel">
+                    <div class="agent-request-header">
+                      <div class="agent-avatar-wrap">
+                        <span class="agent-avatar">🤖</span>
+                        <span class="agent-pulse-mini"></span>
+                      </div>
+                      <div class="agent-request-title">
+                        <strong>Researcher Agent requires clarification</strong>
+                        <span>Please ask the customer the following to complete policy validation</span>
+                      </div>
+                    </div>
+
                     <div class="follow-up-card">
                       <div class="follow-up-progress">
-                        Question {activeFollowUpIndex + 1} of {followUpQuestions.length}
+                        Action Item {activeFollowUpIndex + 1} of {followUpQuestions.length}
                       </div>
                       <div class="follow-up-question">
                         {followUpQuestions[activeFollowUpIndex]?.question}
                       </div>
-                      <textarea
-                        bind:value={activeFollowUpAnswer}
-                        rows="4"
-                        class="remarks-box"
-                        placeholder="Type the customer's answer here"
-                      />
+                      
+                      <!-- Dynamic Contextual Inputs for Follow-up -->
+                      {#if followUpQuestions[activeFollowUpIndex]?.key === 'proof_of_purchase' || followUpQuestions[activeFollowUpIndex]?.key === 'visual_authenticity'}
+                        <div class="follow-up-options">
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'Yes'} on:click={() => activeFollowUpAnswer = 'Yes'}>Yes</button>
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'No'} on:click={() => activeFollowUpAnswer = 'No'}>No</button>
+                        </div>
+                      {:else if followUpQuestions[activeFollowUpIndex]?.key === 'seller_type'}
+                        <div class="follow-up-options">
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'Walmart Store'} on:click={() => activeFollowUpAnswer = 'Walmart Store'}>Walmart Store</button>
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'Marketplace Seller'} on:click={() => activeFollowUpAnswer = 'Marketplace Seller'}>Marketplace</button>
+                        </div>
+                      {:else if followUpQuestions[activeFollowUpIndex]?.key === 'return_channel'}
+                        <div class="follow-up-options">
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'In-store'} on:click={() => activeFollowUpAnswer = 'In-store'}>In-store</button>
+                          <button class="follow-up-option-btn" class:selected={activeFollowUpAnswer === 'Mail'} on:click={() => activeFollowUpAnswer = 'Mail'}>Mail</button>
+                        </div>
+                      {:else if followUpQuestions[activeFollowUpIndex]?.key === 'purchase_date'}
+                        <input type="date" bind:value={activeFollowUpAnswer} class="agent-reply-box date-input" />
+                      {:else}
+                        <textarea
+                          bind:value={activeFollowUpAnswer}
+                          rows="3"
+                          class="agent-reply-box"
+                          placeholder="Type the customer's answer here..."
+                        ></textarea>
+                      {/if}
+
                       {#if followUpError}
                         <div class="error-banner mt-12">⚠ {followUpError}</div>
                       {/if}
@@ -941,21 +1174,26 @@
                           {#if assessmentLoading}
                             <span class="spinner-sm"></span> Validating...
                           {:else if activeFollowUpIndex < followUpQuestions.length - 1}
-                            Save & Next
+                            Save & Next Item
                           {:else}
                             Validate Answers
                           {/if}
                         </button>
                       </div>
                     </div>
+                    
                     <div class="coverage-list mt-12">
                       {#each followUpQuestions as followUp, idx}
-                        <div class="coverage-item">
+                        <div class="coverage-item" class:active-coverage={idx === activeFollowUpIndex}>
                           <div class="coverage-item-head">
                             <span>{followUp.question}</span>
-                            <span class="coverage-pill {idx === activeFollowUpIndex ? 'warn' : 'ok'}">
-                              {idx === activeFollowUpIndex ? 'active' : 'queued'}
-                            </span>
+                            {#if idx < activeFollowUpIndex}
+                              <span class="coverage-pill ok">✓ Answered</span>
+                            {:else if idx === activeFollowUpIndex}
+                              <span class="coverage-pill warn">Awaiting Input</span>
+                            {:else}
+                              <span class="coverage-pill pending">Queued</span>
+                            {/if}
                           </div>
                         </div>
                       {/each}
@@ -1023,34 +1261,46 @@
               </div>
             {/if}
 
-{#if assessmentComplete && !followUpMode && !decisionLogged}
-              <div class="decision-panel">
+            {#if assessmentResult && !followUpMode && !decisionLogged}
+              {@const isApproved = assessmentResult.assessmentComplete}
+              {@const confScore = ((assessmentResult.assessmentConfidence || 0) * 100).toFixed(0)}
+              {@const failedQuestions = assessmentResult.questions?.filter(q => !q.validated) || []}
+              {@const aiRecText = isApproved
+                ? "All policy requirements have been validated successfully. The researcher agent recommends approving this return."
+                : failedQuestions.length > 0
+                  ? `The researcher agent flags this return for denial. Policy deviations identified: ${failedQuestions.map(q => q.exact_issue || q.validation_note || q.question).join(' | ')}`
+                  : "Additional information is required or policy conditions were not explicitly met. Manual review recommended."
+              }
+
+              <div class="decision-panel" class:review-mode={!isApproved}>
                 <div class="decision-panel-header">
-                  <span class="decision-icon">✓</span>
+                  <span class="decision-icon" class:warn-icon={!isApproved}>
+                    {isApproved ? '✓' : '⚠'}
+                  </span>
                   <div>
-                    <div class="decision-title">Assessment Complete — Make Final Decision</div>
-                    <div class="decision-subtitle">Based on the multi-agent analysis, decide whether to approve or deny this return</div>
+                    <div class="decision-title">
+                      {isApproved ? 'Assessment Complete' : 'Policy Deviation Detected'} — Make Final Decision
+                    </div>
+                    <div class="decision-subtitle">Based on the multi-agent analysis, review the recommendation below and decide the outcome</div>
                   </div>
                 </div>
 
-                {#if assessmentResult.remarksAnalysis?.summary}
-                  <div class="decision-suggestion">
-                    <div class="decision-suggestion-label">✦ AI Recommendation</div>
-                    <div class="decision-suggestion-text">{assessmentResult.remarksAnalysis.summary}</div>
-                  </div>
-                {/if}
+                <div class="decision-suggestion">
+                  <div class="decision-suggestion-label">✦ Researcher Agent Recommendation</div>
+                  <div class="decision-suggestion-text">{aiRecText}</div>
+                </div>
 
                 <div class="decision-metrics">
                   <div class="decision-metric">
                     <span class="dm-label">Confidence</span>
                     <span class="dm-value" class:high={assessmentResult.assessmentConfidence >= 0.7} class:low={assessmentResult.assessmentConfidence < 0.7}>
-                      {(assessmentResult.assessmentConfidence * 100).toFixed(0)}%
+                      {confScore}%
                     </span>
                   </div>
                   <div class="decision-metric">
                     <span class="dm-label">Validated</span>
                     <span class="dm-value">
-                      {(assessmentResult.questions || []).filter(q => q.validated).length}/5
+                      {(assessmentResult.questions || []).filter(q => q.validated).length}/{(assessmentResult.questions || []).length || 5}
                     </span>
                   </div>
                   <div class="decision-metric">
@@ -1062,24 +1312,32 @@
                 <div class="decision-actions">
                   <button 
                     class="btn btn-decision btn-approve" 
+                    class:recommended={isApproved}
                     on:click={() => handleLogDecision('approved')}
                     disabled={decisionLogging}
                   >
                     {#if decisionLogging}
                       <span class="spinner-sm"></span> Logging...
                     {:else}
-                      ✓ Approve Return
+                      <span>✓ Approve Return</span>
+                      {#if isApproved}
+                        <span class="btn-conf-badge">{confScore}% Confident</span>
+                      {/if}
                     {/if}
                   </button>
                   <button 
                     class="btn btn-decision btn-deny" 
+                    class:recommended={!isApproved}
                     on:click={() => handleLogDecision('denied')}
                     disabled={decisionLogging}
                   >
                     {#if decisionLogging}
                       <span class="spinner-sm"></span> Logging...
                     {:else}
-                      ✕ Deny Return
+                      <span>✕ Deny Return</span>
+                      {#if !isApproved}
+                        <span class="btn-conf-badge">{confScore}% Confident</span>
+                      {/if}
                     {/if}
                   </button>
                 </div>
@@ -1172,6 +1430,7 @@
   .section-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
   .section-title-row .section-title { margin-bottom: 0; }
   .req { color: var(--red); }
+  .mb-12 { margin-bottom: 12px; }
 
   /* Inputs */
   input, select, textarea { width: 100%; padding: 10px 13px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13.5px; outline: none; transition: border-color 0.15s, box-shadow 0.15s; }
@@ -1208,6 +1467,26 @@
   .tier-badge.tier-gold     { color: var(--amber); background: var(--amber-glow); border: 1px solid rgba(212,168,67,0.3); }
   .tier-badge.tier-silver   { color: #b0b8c8; background: rgba(176,184,200,0.1);  border: 1px solid rgba(176,184,200,0.2); }
   .tier-badge.tier-bronze   { color: #cd7f32; background: rgba(205,127,50,0.1);   border: 1px solid rgba(205,127,50,0.2); }
+
+  /* Recent Orders list */
+  .recent-orders-controls { display: flex; align-items: center; gap: 12px; }
+  .recent-orders-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+  .recent-order-card { display: flex; flex-direction: column; align-items: stretch; padding: 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; text-align: left; position: relative; }
+  .recent-order-card:hover { border-color: rgba(212,168,67,0.4); background: var(--amber-glow); transform: translateY(-1px); }
+  .ro-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .ro-date { font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .ro-price { font-family: var(--font-mono); font-size: 13.5px; font-weight: 600; color: var(--amber); }
+  .ro-customer { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+  .ro-customer strong { font-size: 13px; color: var(--text-primary); }
+  .ro-email { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+  .ro-body { flex: 1; margin-bottom: 4px; }
+  .ro-name { font-size: 12.5px; font-weight: 500; color: var(--text-primary); line-height: 1.4; margin-bottom: 6px; }
+  .ro-meta { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+  .ro-sk { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); background: var(--bg-surface); padding: 2px 6px; border-radius: 3px; border: 1px solid var(--border); }
+  .ro-dot { color: var(--border); }
+  .ro-arrow { position: absolute; bottom: 16px; right: 16px; font-size: 14px; color: var(--amber); opacity: 0; transition: opacity 0.15s, transform 0.15s; transform: translateX(-4px); }
+  .recent-order-card:hover .ro-arrow { opacity: 1; transform: translateX(0); }
+  .empty-state { padding: 24px; text-align: center; color: var(--text-muted); background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: var(--radius-sm); font-size: 13px; }
 
   /* Item card */
   .item-card { margin-top: 14px; background: var(--bg-elevated); border: 1px solid rgba(212,168,67,0.2); border-radius: var(--radius-sm); padding: 16px; }
@@ -1249,9 +1528,20 @@
   .pkg-card.pkg-red.selected    .pkg-label { color: var(--red); }
 
   /* Assessment */
-  .assessment-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .assessment-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
   .btn-assess { align-self: flex-start; }
   .assessment-success { font-size: 12px; color: var(--green); display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
+  
+  /* Agent Loading UI */
+  .agent-loading-banner { display: flex; align-items: center; gap: 16px; padding: 16px 20px; background: linear-gradient(90deg, rgba(212,168,67,0.1), rgba(212,168,67,0.02)); border: 1px solid rgba(212,168,67,0.3); border-radius: var(--radius-sm); width: 100%; border-left: 3px solid var(--amber); margin-bottom: 8px; }
+  .agent-spinner-ring { position: relative; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .agent-spinner-core { width: 26px; height: 26px; border: 2px solid rgba(212,168,67,0.2); border-top-color: var(--amber); border-radius: 50%; animation: spin 0.8s linear infinite; position: absolute; }
+  .agent-spinner-ring::after { content: ''; position: absolute; width: 10px; height: 10px; background: var(--amber); border-radius: 50%; box-shadow: 0 0 10px var(--amber); animation: agent-pulse 1.5s ease-in-out infinite alternate; }
+  @keyframes agent-pulse { 0% { transform: scale(0.8); opacity: 0.5; } 100% { transform: scale(1.2); opacity: 1; } }
+  .agent-loading-content { display: flex; flex-direction: column; gap: 4px; }
+  .agent-loading-title { font-size: 12px; font-weight: 700; color: var(--amber); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; }
+  .agent-loading-step { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+
   .assessment-result-panel { width: 100%; margin-top: 14px; padding: 14px; border-radius: var(--radius-md); border: 1px solid rgba(212,168,67,0.2); background: linear-gradient(180deg, rgba(26,29,37,0.92), rgba(15,17,23,0.92)); }
   .assessment-result-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
   .assessment-result-title { font-size: 13px; font-weight: 700; color: var(--text-primary); }
@@ -1271,18 +1561,41 @@
   .field-hint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
   .remarks-box { min-height: 96px; resize: vertical; }
   .coverage-list { display: flex; flex-direction: column; gap: 8px; }
-  .coverage-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
-  .coverage-item-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; font-size: 12px; color: var(--text-primary); }
+  .coverage-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); transition: all 0.15s; }
+  .coverage-item-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; font-size: 12px; color: var(--text-primary); font-weight: 500; }
   .coverage-item-meta { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 6px; font-size: 11.5px; color: var(--text-muted); }
   .coverage-item-issue { margin-top: 6px; padding: 8px 10px; border-left: 3px solid var(--amber); background: rgba(212,168,67,0.08); color: var(--text-secondary); font-size: 11.5px; line-height: 1.5; border-radius: 4px; }
   .coverage-pill { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
   .coverage-pill.ok { color: var(--green); background: var(--green-dim); border-color: rgba(76,175,130,0.35); }
   .coverage-pill.warn { color: var(--amber); background: var(--amber-glow); border-color: rgba(212,168,67,0.35); }
+  
+  /* Agent Follow-up Request UI */
+  .agent-request-panel { margin-top: 20px; padding: 18px; border: 1px dashed rgba(212,168,67,0.5); border-radius: var(--radius-md); background: linear-gradient(180deg, rgba(212,168,67,0.08), rgba(212,168,67,0.02)); position: relative; }
+  .agent-request-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .agent-avatar-wrap { position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid rgba(212,168,67,0.4); border-radius: 50%; font-size: 18px; z-index: 1; }
+  .agent-pulse-mini { position: absolute; inset: -4px; border: 2px solid var(--amber); border-radius: 50%; opacity: 0; animation: agent-pulse-ring 2s infinite; z-index: 0; }
+  @keyframes agent-pulse-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(1.4); opacity: 0; } }
+  .agent-request-title { display: flex; flex-direction: column; gap: 3px; }
+  .agent-request-title strong { font-size: 14px; color: var(--amber); font-family: var(--font-display); }
+  .agent-request-title span { font-size: 11.5px; color: var(--text-secondary); }
+  
+  .agent-reply-box { background: var(--bg-surface); border: 1px solid rgba(212,168,67,0.3); border-radius: var(--radius-sm); padding: 12px; font-size: 13px; color: var(--text-primary); width: 100%; transition: border-color 0.15s; outline: none; resize: vertical; min-height: 80px; margin-bottom: 10px; }
+  .agent-reply-box:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(212,168,67,0.15); }
+  .date-input { min-height: auto; cursor: pointer; color-scheme: dark; }
+
+  .follow-up-options { display: flex; gap: 10px; margin-bottom: 10px; }
+  .follow-up-option-btn { flex: 1; padding: 12px 16px; background: var(--bg-surface); border: 1px solid rgba(212,168,67,0.3); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+  .follow-up-option-btn:hover { background: rgba(212,168,67,0.05); }
+  .follow-up-option-btn.selected { background: var(--amber-glow); border-color: var(--amber); color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+
+  .coverage-pill.pending { color: var(--text-muted); background: var(--bg-surface); border-color: var(--border); }
+  .active-coverage { border-color: rgba(212,168,67,0.4) !important; background: rgba(212,168,67,0.05) !important; }
+  
   .remarks-summary { font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
   .follow-up-panel { display: flex; flex-direction: column; gap: 10px; }
-  .follow-up-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
-  .follow-up-progress { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--amber); }
-  .follow-up-question { font-size: 13px; color: var(--text-primary); line-height: 1.5; font-weight: 600; }
+  .follow-up-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); }
+  .follow-up-progress { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--amber); font-weight: 700; }
+  .follow-up-question { font-size: 14px; color: var(--text-primary); line-height: 1.5; font-weight: 600; margin-bottom: 6px; }
   .follow-up-actions { display: flex; justify-content: flex-end; }
   .trace-details { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); padding: 10px 12px; }
   .trace-details summary { cursor: pointer; font-size: 11px; font-weight: 700; color: var(--amber); text-transform: uppercase; letter-spacing: 0.08em; }
@@ -1489,8 +1802,10 @@
 
 /* Decision panel */
   .decision-panel { margin-top: 14px; padding: 18px; border-radius: var(--radius-md); border: 1px solid rgba(76,175,130,0.3); background: var(--green-dim); }
+  .decision-panel.review-mode { background: var(--amber-glow); border-color: rgba(212,168,67,0.3); }
   .decision-panel-header { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; }
   .decision-icon { font-size: 28px; color: var(--green); flex-shrink: 0; }
+  .decision-icon.warn-icon { color: var(--amber); }
   .decision-title { font-size: 14px; font-weight: 700; color: var(--text-primary); }
   .decision-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 4px; line-height: 1.5; }
   .decision-suggestion { margin-bottom: 16px; padding: 12px 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); }
@@ -1504,11 +1819,15 @@
   .dm-value.low { color: var(--amber); }
   .dm-value.loss { color: var(--red); }
   .decision-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .btn-decision { padding: 14px 22px; font-size: 14px; font-weight: 700; }
+  .btn-decision { padding: 14px 22px; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; width: 100%; transition: all 0.2s; }
+  .btn-decision.recommended { border-width: 2px; }
   .btn-approve { background: var(--green-dim); border-color: rgba(76,175,130,0.4); color: var(--green); }
   .btn-approve:hover:not(:disabled) { background: rgba(76,175,130,0.2); }
+  .btn-approve.recommended { border-color: rgba(76,175,130,0.8); background: rgba(76,175,130,0.15); box-shadow: 0 0 15px rgba(76,175,130,0.1); }
   .btn-deny { background: var(--red-dim); border-color: rgba(224,92,92,0.4); color: var(--red); }
   .btn-deny:hover:not(:disabled) { background: rgba(224,92,92,0.2); }
+  .btn-deny.recommended { border-color: rgba(224,92,92,0.8); background: rgba(224,92,92,0.15); box-shadow: 0 0 15px rgba(224,92,92,0.1); }
+  .btn-conf-badge { font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,0.3); padding: 3px 8px; border-radius: 4px; letter-spacing: 0.05em; font-weight: 700; display: inline-flex; align-items: center; color: var(--text-primary); }
   .decision-logged-banner { margin-top: 14px; padding: 16px 18px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
   .decision-logged-content { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
   .decision-logged-banner .banner-icon { color: var(--green); font-size: 20px; }

@@ -24,17 +24,15 @@
 
 {#if $session}
 <div class="app-shell">
-  <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-top">
       <div class="logo">
-        <span class="arc">Arc</span><span class="ella">ella</span>
+        <span class="wal">Wal</span><span class="mart">mart</span>
       </div>
       <div class="logo-sub">Support Ops</div>
     </div>
 
     <nav class="nav">
-      <!-- Queues section -->
       <div class="nav-section-label">Queues</div>
 
       <a href="/dashboard" class="nav-item" class:active={isReturns}>
@@ -51,7 +49,6 @@
         Create Ticket
       </a>
 
-      <!-- Tools section -->
       <div class="nav-section-label" style="margin-top:12px">Tools</div>
 
       <a href="/dashboard/instagram-posts" class="nav-item" class:active={isInstagramPosts}>
@@ -94,7 +91,6 @@
     </div>
   </aside>
 
-  <!-- Main area -->
   <main class="main-content">
     <slot />
   </main>
@@ -130,8 +126,8 @@
     letter-spacing: -0.5px;
   }
 
-  .arc  { color: var(--text-primary); }
-  .ella { color: var(--amber); }
+  .wal  { color: var(--text-primary); }
+  .mart { color: #ffc220; } /* Walmart Spark Yellow */
 
   .logo-sub {
     font-family: var(--font-mono);
@@ -179,8 +175,8 @@
   }
 
   .nav-item.active {
-    background: var(--amber-glow);
-    color: var(--amber);
+    background: rgba(0, 113, 206, 0.1); /* Walmart Blue Tint */
+    color: #0071ce; 
   }
 
   .nav-item.disabled {
@@ -211,7 +207,7 @@
     font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 500;
-    color: var(--amber);
+    color: #0071ce; /* Walmart Blue */
     flex-shrink: 0;
   }
 

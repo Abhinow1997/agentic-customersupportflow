@@ -1,5 +1,6 @@
 # app/main.py
 import sys
+from fastapi import Response
 
 # ── Windows UTF-8 guard ───────────────────────────────────────────────────
 # litellm opens its model-pricing JSON at import time. On Windows the default
@@ -32,6 +33,7 @@ from app.routers import (
     access_item_return,
     log_decision,
     store_sales,
+    recent_orders,
 )
 
 settings = get_settings()
@@ -75,6 +77,7 @@ app.include_router(instagram_posts.router)
 app.include_router(access_item_return.router)
 app.include_router(log_decision.router)
 app.include_router(store_sales.router)
+app.include_router(recent_orders.router)
 
 # ── Root ─────────────────────────────────────────────────────────────────────
 
@@ -86,3 +89,7 @@ async def root():
         "docs": "/docs",
         "health": "/health",
     }
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(content="", media_type="image/x-icon")

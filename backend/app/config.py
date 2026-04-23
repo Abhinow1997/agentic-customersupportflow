@@ -5,8 +5,8 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     # ── App ────────────────────────────────────────────────────────────────
-    APP_NAME: str = "Arcella Support API"
-    APP_VERSION: str = "0.1.0"
+    APP_NAME: str = "Walmart Support API"
+    APP_VERSION: str = "0.1.1"
     APP_ENV: str = "development"
 
     # ── Snowflake ──────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ Dewey-inspired adaptive triage system with multi-agent communication.
 
 Flow:
 1. Researcher Agent receives item + packaging condition from frontend
-2. Researcher formulates answers to 5 critical questions
+2. Researcher formulates answers to the critical questions
 3. For each answer, Researcher communicates with Policy Agent for validation
 4. Policy Agent validates against scraped policies
 5. Researcher adjusts based on validation feedback
@@ -79,14 +79,14 @@ class ResearcherPolicyExchange(BaseModel):
 class AccessItemReturnResponse(BaseModel):
     """
     Returns:
-    - Answers to the 5 critical questions
+    - Answers to the critical questions
     - Communication history between Researcher and Policy agents
     - Final assessment metrics
     """
     item_sk: int
     packaging_condition: str
     
-    # The 5 critical questions with answers
+    # The critical questions with answers
     questions: list[QuestionAnswer]
     
     # Agent communication history
@@ -125,7 +125,7 @@ async def access_item_return(payload: AccessItemReturnRequest) -> AccessItemRetu
     """
     Dewey-inspired multi-agent assessment system.
     
-    The Researcher Agent gathers information to answer 5 critical questions,
+    The Researcher Agent gathers information to answer the critical questions,
     communicating with the Policy Agent for validation at each step.
     """
     
@@ -154,7 +154,6 @@ async def access_item_return(payload: AccessItemReturnRequest) -> AccessItemRetu
     
     # ── Researcher gathers answers through Policy Agent communication ─────
     try:
-        # This is where the multi-turn communication happens
         research_result = await researcher.investigate_return(
             item_context=item_context,
             policy_agent=policy_validator,

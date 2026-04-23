@@ -9,9 +9,9 @@
 
   // Demo credentials
   const VALID_AGENTS = [
-    { email: 'daphne.k@arcella.com', password: 'arcella2025', name: 'Daphne K.', role: 'Senior Support Agent', avatar: 'DK' },
-    { email: 'ravi.p@arcella.com', password: 'arcella2025', name: 'Ravi P.', role: 'Support Agent', avatar: 'RP' },
-    { email: 'mei.l@arcella.com', password: 'arcella2025', name: 'Mei L.', role: 'Support Agent', avatar: 'ML' }
+    { email: 'joe.doe@walmart.com', password: 'walmart2025', name: 'Joe D.', role: 'Senior Support Agent', avatar: 'DK' },
+    { email: 'ravi.p@walmart.com', password: 'walmart2025', name: 'Ravi P.', role: 'Support Agent', avatar: 'RP' },
+    { email: 'mei.l@walmart.com', password: 'walmart2025', name: 'Mei L.', role: 'Support Agent', avatar: 'ML' }
   ];
 
   async function handleLogin() {
@@ -20,11 +20,12 @@
     await new Promise(r => setTimeout(r, 800));
 
     const agent = VALID_AGENTS.find(a => a.email === email && a.password === password);
+
     if (agent) {
       session.set({ name: agent.name, role: agent.role, avatar: agent.avatar, email: agent.email });
       goto('/dashboard');
     } else {
-      error = 'Invalid credentials. Try daphne.k@arcella.com / arcella2025';
+      error = 'Invalid credentials. Try joe.doe@walmart.com / walmart2025';
     }
     loading = false;
   }
@@ -35,14 +36,12 @@
 </script>
 
 <div class="login-page">
-  <!-- Background grid -->
   <div class="grid-bg"></div>
 
-  <!-- Left panel — branding -->
   <div class="brand-panel">
     <div class="brand-content">
       <div class="wordmark">
-        <span class="arc">Arc</span><span class="ella">ella</span>
+        <span class="wal">Wal</span><span class="mart">mart</span>
       </div>
       <div class="tagline">Customer Operations Platform</div>
 
@@ -69,15 +68,14 @@
     </div>
 
     <div class="brand-footer">
-      Internal use only · Arcella Operations
+      Internal use only · Walmart Operations
     </div>
   </div>
 
-  <!-- Right panel — login form -->
   <div class="form-panel">
     <div class="form-card">
       <div class="form-header">
-        <div class="form-logo">A</div>
+        <div class="form-logo">W</div>
         <h1>Agent Sign In</h1>
         <p>Access your support queue</p>
       </div>
@@ -90,7 +88,7 @@
             type="email"
             bind:value={email}
             on:keydown={handleKeydown}
-            placeholder="name@arcella.com"
+            placeholder="name@walmart.com"
             autocomplete="email"
           />
         </div>
@@ -120,7 +118,7 @@
         </button>
 
         <div class="demo-hint">
-          <strong>Demo:</strong> daphne.k@arcella.com · arcella2025
+          <strong>Demo:</strong> joe.doe@walmart.com · walmart2025
         </div>
       </div>
     </div>
@@ -138,9 +136,10 @@
   .grid-bg {
     position: fixed;
     inset: 0;
+    /* Walmart Blue grid tint */
     background-image:
-      linear-gradient(rgba(212,168,67,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(212,168,67,0.03) 1px, transparent 1px);
+      linear-gradient(rgba(0, 113, 206, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 113, 206, 0.04) 1px, transparent 1px);
     background-size: 48px 48px;
     pointer-events: none;
   }
@@ -148,7 +147,8 @@
   /* Brand panel */
   .brand-panel {
     flex: 1;
-    background: linear-gradient(145deg, #0f1117 0%, #12151e 60%, #0e1220 100%);
+    /* Deeper cool-blue tint for the dark panel */
+    background: linear-gradient(145deg, #08121f 0%, #0a1729 60%, #050b14 100%);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
@@ -165,7 +165,8 @@
     left: -100px;
     width: 400px;
     height: 400px;
-    background: radial-gradient(circle, rgba(212,168,67,0.06) 0%, transparent 70%);
+    /* Walmart Spark Yellow radial glow */
+    background: radial-gradient(circle, rgba(255, 194, 32, 0.08) 0%, transparent 70%);
     pointer-events: none;
   }
 
@@ -182,8 +183,8 @@
     letter-spacing: -1px;
   }
 
-  .arc { color: var(--text-primary); }
-  .ella { color: var(--amber); }
+  .wal { color: var(--text-primary); }
+  .mart { color: #ffc220; } /* Walmart Spark Yellow */
 
   .tagline {
     font-family: var(--font-mono);
@@ -197,7 +198,8 @@
   .brand-divider {
     width: 48px;
     height: 2px;
-    background: linear-gradient(90deg, var(--amber), transparent);
+    /* Walmart Spark Yellow gradient */
+    background: linear-gradient(90deg, #ffc220, transparent);
     margin-bottom: 48px;
     border-radius: 2px;
   }
@@ -220,7 +222,7 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--amber);
+    background: #ffc220; /* Walmart Spark Yellow */
     flex-shrink: 0;
   }
 
@@ -254,15 +256,16 @@
   .form-logo {
     width: 44px;
     height: 44px;
-    background: var(--amber-glow);
-    border: 1px solid rgba(212,168,67,0.3);
+    /* Walmart Blue logo block */
+    background: rgba(0, 113, 206, 0.08);
+    border: 1px solid rgba(0, 113, 206, 0.25);
     border-radius: var(--radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: var(--font-display);
     font-size: 22px;
-    color: var(--amber);
+    color: #0071ce;
     margin: 0 auto 20px;
   }
 
@@ -305,8 +308,9 @@
   }
 
   input:focus {
-    border-color: var(--amber-dim);
-    box-shadow: 0 0 0 3px var(--amber-glow);
+    /* Walmart Blue focus states */
+    border-color: #0071ce;
+    box-shadow: 0 0 0 3px rgba(0, 113, 206, 0.2);
   }
 
   input::placeholder {
@@ -326,8 +330,9 @@
   .btn-login {
     width: 100%;
     padding: 12px;
-    background: var(--amber);
-    color: #0c0e14;
+    /* Walmart Blue primary button */
+    background: #0071ce;
+    color: #ffffff;
     border: none;
     border-radius: var(--radius-sm);
     font-size: 14px;
@@ -338,17 +343,18 @@
     align-items: center;
     justify-content: center;
     gap: 8px;
+    cursor: pointer;
   }
 
-  .btn-login:hover:not(:disabled) { background: #e0b84d; }
+  .btn-login:hover:not(:disabled) { background: #005ea6; }
   .btn-login:active:not(:disabled) { transform: scale(0.99); }
   .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(0,0,0,0.3);
-    border-top-color: #000;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: #ffffff;
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
     display: inline-block;

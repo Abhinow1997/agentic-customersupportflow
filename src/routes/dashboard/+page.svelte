@@ -7,7 +7,7 @@
 
   // ── State ──────────────────────────────────────────────────────────────────
   let activeTab = 'Open';
-  let ticketsQueued = false;
+  let ticketsQueued = $tickets.length > 0;
 
   $: filteredTickets = $tickets.filter(t => {
     if (activeTab !== 'All' && t.status !== activeTab) return false;
@@ -152,80 +152,43 @@
     </div>
   </header>
 
-  {#if !ticketsQueued}
-    <!-- ── Initial State: Show Counts & Queue Button ── -->
-    <div class="queue-stage">
-      <div class="queue-container">
-        <div class="queue-header">
-          <h3>Queued Return Tickets</h3>
-          <p>Load tickets from Snowflake to begin operations</p>
-        </div>
-
-        <div class="queue-counts">
-          <div class="count-card">
-            <div class="count-number">{counts.Open}</div>
-            <div class="count-label">Open Tickets</div>
-          </div>
-          <div class="count-card">
-            <div class="count-number">{counts.Closed}</div>
-            <div class="count-label">Closed Tickets</div>
-          </div>
-          <div class="count-card">
-            <div class="count-number">{counts.All}</div>
-            <div class="count-label">Total</div>
-          </div>
-        </div>
-
-        <button 
-          class="btn-queue" 
-          on:click={handleQueueTickets}
-          disabled={$ticketsLoading}
-        >
-          {#if $ticketsLoading}
-            <span class="spinner-sm"></span>
-            Loading tickets…
-          {:else}
-            ↻ Queue Tickets
-          {/if}
-        </button>
-
-        {#if $ticketsError}
-          <div class="queue-error">{$ticketsError}</div>
-        {/if}
+  <div class="split-view">
+    <div class="list-panel">
+      <div class="list-filters">
+        <input 
+          class="search-input" 
+          type="text" 
+          placeholder="Search by customer, category, reason…" 
+          value={$filters.search} 
+          on:input={setSearch} 
+          disabled={!ticketsQueued}
+        />
       </div>
-    </div>
-  {:else}
-    <!-- ── Queued State: Show List & Detail ── -->
-    <div class="split-view">
-      <div class="list-panel">
-        <div class="list-filters">
-          <input 
-            class="search-input" 
-            type="text" 
-            placeholder="Search by customer, category, reason…" 
-            value={$filters.search} 
-            on:input={setSearch} 
-          />
-        </div>
 
-        <div class="filter-tabs">
-          {#each ['Open', 'Closed', 'All'] as tab}
-            <button 
-              class="tab-btn" 
-              class:active={activeTab === tab} 
-              on:click={() => activeTab = tab}
-            >
-              {tab}
-              <span class="tab-count">{counts[tab]}</span>
-            </button>
-          {/each}
-        </div>
+      <div class="filter-tabs">
+        {#each ['Open', 'Closed', 'All'] as tab}
+          <button 
+            class="tab-btn" 
+            class:active={activeTab === tab} 
+            on:click={() => activeTab = tab}
+            disabled={!ticketsQueued}
+          >
+            {tab}
+            <span class="tab-count">{counts[tab]}</span>
+          </button>
+        {/each}
+      </div>
 
-        <div class="returns-list">
-          {#if $ticketsError}
-            <div class="list-banner warn">⚠ {$ticketsError}</div>
-          {/if}
+      <div class="returns-list">
+        {#if $ticketsError}
+          <div class="list-banner warn">⚠ {$ticketsError}</div>
+        {/if}
 
+        {#if !ticketsQueued}
+          <div class="empty-state">
+            Click 'Queue Tickets' to load the return list
+          </div>
+        {:else}
           {#each filteredTickets as t (t.id)}
             <button 
               class="return-row" 
@@ -268,199 +231,217 @@
               {/if}
             </div>
           {/if}
-        </div>
-      </div>
-
-      <div class="detail-panel">
-        {#if $selectedTicket}
-          {@const t = $selectedTicket}
-          <div class="detail-content">
-
-            <div class="detail-header">
-              <div class="detail-header-top">
-                <div class="header-ids">
-                  <span class="detail-id">{t.id}</span>
-                  <span class="status-badge status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
-                  {#if isStructuredResolution(t.resolution)}<span class="manual-badge">✎ Manual Entry</span>{/if}
-                </div>
-                <span class="return-date-large">{formatDate(t.created)}</span>
-              </div>
-              <h3 class="detail-title">{t.item?.name ?? t.id}</h3>
-              <div class="detail-reason">
-                {#if isStructuredResolution(t.resolution)}
-                  {parseStructuredResolution(t.resolution)['RETURN REASON'] ?? t.returnReason ?? '—'}
-                {:else}
-                  {t.returnReason ?? '—'}
-                {/if}
-              </div>
-            </div>
-
-            {#if isStructuredResolution(t.resolution)}
-              {@const ra = parseStructuredResolution(t.resolution)}
-              <div class="detail-section assessment-section">
-                <div class="section-label">✓ Return Assessment <span class="manual-tag">Manual Entry</span></div>
-                <div class="assessment-grid">
-                  {#if ra['ITEM']}
-                    <div class="assessment-block full-width">
-                      <span class="ab-label">Product</span>
-                      <span class="ab-val">{ra['ITEM']}</span>
-                    </div>
-                  {/if}
-                  {#if ra['UNIT PRICE']}
-                    <div class="assessment-block">
-                      <span class="ab-label">Unit Price / Qty / Total</span>
-                      <span class="ab-val mono">{ra['UNIT PRICE']}</span>
-                    </div>
-                  {/if}
-                  {#if ra['PACKAGING ASSESSMENT']}
-                    <div class="assessment-block">
-                      <span class="ab-label">Packaging Condition</span>
-                      <span class="ab-val pkg">{ra['PACKAGING ASSESSMENT']}</span>
-                    </div>
-                  {/if}
-                  {#if ra['FINANCIALS']}
-                    <div class="assessment-block full-width">
-                      <span class="ab-label">Financials Breakdown</span>
-                      <span class="ab-val mono">{ra['FINANCIALS']}</span>
-                    </div>
-                  {/if}
-                  {#if ra['RETURN REASON']}
-                    <div class="assessment-block full-width">
-                      <span class="ab-label">Return Reason (AI Generated)</span>
-                      <span class="ab-val reason-text">{ra['RETURN REASON']}</span>
-                    </div>
-                  {/if}
-                  {#if ra['AGENT NOTES']}
-                    <div class="assessment-block full-width">
-                      <span class="ab-label">Agent Notes</span>
-                      <span class="ab-val notes-text">{ra['AGENT NOTES']}</span>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            {/if}
-
-            <div class="two-col">
-              <div class="detail-section">
-                <div class="section-label">Return Financials</div>
-                <div class="kv-list">
-                  <div class="kv-row"><span class="kv-key">Return Amount</span><span class="kv-val amber">{formatAmt(t.returnAmt)}</span></div>
-                  <div class="kv-row"><span class="kv-key">Net Loss</span><span class="kv-val red">{formatAmt(t.netLoss)}</span></div>
-                  <div class="kv-row"><span class="kv-key">Return Fee</span><span class="kv-val">{formatAmt(t.fee)}</span></div>
-                  <div class="kv-row"><span class="kv-key">Qty Returned</span><span class="kv-val">{t.item?.returnQty ?? '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Return Date</span><span class="kv-val">{formatDate(t.created)}</span></div>
-                </div>
-              </div>
-              <div class="detail-section">
-                <div class="section-label">Item Details <span class="sf-tag">✦ Snowflake</span></div>
-                <div class="kv-list">
-                  <div class="kv-row"><span class="kv-key">Product</span><span class="kv-val">{t.item?.name ?? '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Brand</span><span class="kv-val">{t.item?.brand || '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.categoryFull || t.item?.category || '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Class</span><span class="kv-val">{t.item?.class ?? '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `${t.item.price}` : '—'}</span></div>
-                  <div class="kv-row"><span class="kv-key">Return Reason</span><span class="kv-val">{t.returnReason ?? '—'}</span></div>
-                  {#if t.item?.url}<div class="kv-row"><span class="kv-key">Product Page</span><span class="kv-val"><a href={t.item.url} target="_blank" rel="noreferrer" class="item-link">View ↗</a></span></div>{/if}
-                </div>
-              </div>
-            </div>
-
-            <div class="detail-section">
-              <div class="section-label">Customer Details</div>
-              <div class="customer-card">
-                <div class="cust-avatar">{(t.customer?.name ?? 'U').split(' ').map(n => n[0]).join('').slice(0,2)}</div>
-                <div class="cust-body">
-                  <div class="cust-row">
-                    <div class="cust-main">
-                      <div class="cust-name">{t.customer?.name ?? '—'}</div>
-                      <div class="cust-tier tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</div>
-                    </div>
-                  </div>
-                  <div class="cust-contact">
-                    <div class="contact-item">
-                      <span class="contact-icon">✉</span>
-                      <span class="contact-val">{t.customer?.email ?? '—'}</span>
-                    </div>
-                  </div>
-                  <div class="cust-stats">
-                    <div class="cust-stat"><span class="cust-stat-val">{t.customer?.ltv ?? '—'}</span><span class="cust-stat-label">Est. LTV</span></div>
-                    <div class="cust-stat"><span class="cust-stat-val">{t.customer?.orders ?? '—'}</span><span class="cust-stat-label">Returns</span></div>
-                    <div class="cust-stat"><span class="cust-stat-val tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</span><span class="cust-stat-label">Tier</span></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- ── idle: manual resolution only ── -->
-            {#if uiStage === 'idle'}
-              <div class="action-bar">
-                <button class="btn-action btn-manual" on:click={handleManualClick}>✎ Manually Resolve</button>
-              </div>
-
-            <!-- ── manual_selecting: pick a resolution ── -->
-            {:else if uiStage === 'manual_selecting'}
-              <div class="detail-section resolution-section">
-                <div class="section-label">Select Resolution Action</div>
-                <div class="resolution-grid">
-                  {#each RESOLUTION_OPTIONS as opt}
-                    <button class="res-option color-{opt.color}" on:click={() => handleSelectResolution(opt)}>
-                      <span class="res-icon">{opt.icon}</span>
-                      <span class="res-label">{opt.label}</span>
-                      <span class="res-desc">{opt.desc}</span>
-                    </button>
-                  {/each}
-                </div>
-              </div>
-
-            <!-- ── manual_selected: show choice + confirm ── -->
-            {:else if uiStage === 'manual_selected'}
-              <div class="detail-section resolution-section">
-                <div class="section-label">
-                  Selected Resolution
-                  <button class="link-btn" on:click={handleBack}>← Change</button>
-                </div>
-                <div class="selected-resolution color-{selectedResolution.color}">
-                  <span class="res-icon">{selectedResolution.icon}</span>
-                  <div>
-                    <div class="res-label">{selectedResolution.label}</div>
-                    <div class="res-desc">{selectedResolution.desc}</div>
-                  </div>
-                </div>
-              </div>
-              <div class="action-bar">
-                <button class="btn-action btn-confirm" on:click={handleConfirm} disabled={confirmLoading}>
-                  {#if confirmLoading}<span class="spinner-sm"></span> Closing…{:else}✓ Confirm & Close Ticket{/if}
-                </button>
-              </div>
-
-            <!-- ── confirmed: persisted closed state ── -->
-            {:else if uiStage === 'confirmed'}
-              {#if t.resolution}
-                <div class="detail-section resolution-section">
-                  <div class="section-label">Resolution Applied</div>
-                  <div class="selected-resolution color-{resolutionColor(t.resolution)}">
-                    <span class="res-icon">{resolutionIcon(t.resolution)}</span>
-                    <div>
-                      <div class="res-label">{resolutionLabel(t.resolution)}</div>
-                      <div class="res-desc">Persisted to Snowflake · SR_RESOLUTION = '{t.resolution}'</div>
-                    </div>
-                  </div>
-                </div>
-              {/if}
-              <div class="closed-banner">✓ Ticket closed and persisted to Snowflake</div>
-            {/if}
-
-          </div>
-        {:else}
-          <div class="detail-empty">
-            <div class="empty-icon">↩</div>
-            <div>Select a return to review</div>
-            <div class="empty-sub">Live from Snowflake · STORE_RETURNS × ITEM × REASON × CUSTOMER</div>
-          </div>
         {/if}
       </div>
     </div>
-  {/if}
+
+    <div class="detail-panel">
+      {#if !ticketsQueued}
+        <div class="detail-empty">
+          <div class="queue-header">
+            <h3 style="font-family: var(--font-display); font-size: 24px; color: var(--text-primary); margin-bottom: 8px;">Queued Return Tickets</h3>
+            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">Load tickets from Snowflake to begin operations</p>
+          </div>
+          
+          <button 
+            class="btn-queue" 
+            style="width: 200px;"
+            on:click={handleQueueTickets}
+            disabled={$ticketsLoading}
+          >
+            {#if $ticketsLoading}
+              <span class="spinner-sm"></span>
+              Loading tickets…
+            {:else}
+              ↻ Queue Tickets
+            {/if}
+          </button>
+
+          {#if $ticketsError}
+            <div class="queue-error" style="margin-top: 16px;">{$ticketsError}</div>
+          {/if}
+        </div>
+        
+      {:else if $selectedTicket}
+        {@const t = $selectedTicket}
+        <div class="detail-content">
+          <div class="detail-header">
+            <div class="detail-header-top">
+              <div class="header-ids">
+                <span class="detail-id">{t.id}</span>
+                <span class="status-badge status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
+                {#if isStructuredResolution(t.resolution)}<span class="manual-badge">✎ Manual Entry</span>{/if}
+              </div>
+              <span class="return-date-large">{formatDate(t.created)}</span>
+            </div>
+            <h3 class="detail-title">{t.item?.name ?? t.id}</h3>
+            <div class="detail-reason">
+              {#if isStructuredResolution(t.resolution)}
+                {parseStructuredResolution(t.resolution)['RETURN REASON'] ?? t.returnReason ?? '—'}
+              {:else}
+                {t.returnReason ?? '—'}
+              {/if}
+            </div>
+          </div>
+
+          {#if isStructuredResolution(t.resolution)}
+            {@const ra = parseStructuredResolution(t.resolution)}
+            <div class="detail-section assessment-section">
+              <div class="section-label">✓ Return Assessment <span class="manual-tag">Manual Entry</span></div>
+              <div class="assessment-grid">
+                {#if ra['ITEM']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Product</span>
+                    <span class="ab-val">{ra['ITEM']}</span>
+                  </div>
+                {/if}
+                {#if ra['UNIT PRICE']}
+                  <div class="assessment-block">
+                    <span class="ab-label">Unit Price / Qty / Total</span>
+                    <span class="ab-val mono">{ra['UNIT PRICE']}</span>
+                  </div>
+                {/if}
+                {#if ra['PACKAGING ASSESSMENT']}
+                  <div class="assessment-block">
+                    <span class="ab-label">Packaging Condition</span>
+                    <span class="ab-val pkg">{ra['PACKAGING ASSESSMENT']}</span>
+                  </div>
+                {/if}
+                {#if ra['FINANCIALS']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Financials Breakdown</span>
+                    <span class="ab-val mono">{ra['FINANCIALS']}</span>
+                  </div>
+                {/if}
+                {#if ra['RETURN REASON']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Return Reason (AI Generated)</span>
+                    <span class="ab-val reason-text">{ra['RETURN REASON']}</span>
+                  </div>
+                {/if}
+                {#if ra['AGENT NOTES']}
+                  <div class="assessment-block full-width">
+                    <span class="ab-label">Agent Notes</span>
+                    <span class="ab-val notes-text">{ra['AGENT NOTES']}</span>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
+          <div class="two-col">
+            <div class="detail-section">
+              <div class="section-label">Return Financials</div>
+              <div class="kv-list">
+                <div class="kv-row"><span class="kv-key">Return Amount</span><span class="kv-val amber">{formatAmt(t.returnAmt)}</span></div>
+                <div class="kv-row"><span class="kv-key">Net Loss</span><span class="kv-val red">{formatAmt(t.netLoss)}</span></div>
+                <div class="kv-row"><span class="kv-key">Return Fee</span><span class="kv-val">{formatAmt(t.fee)}</span></div>
+                <div class="kv-row"><span class="kv-key">Qty Returned</span><span class="kv-val">{t.item?.returnQty ?? '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Return Date</span><span class="kv-val">{formatDate(t.created)}</span></div>
+              </div>
+            </div>
+            <div class="detail-section">
+              <div class="section-label">Item Details <span class="sf-tag">✦ Snowflake</span></div>
+              <div class="kv-list">
+                <div class="kv-row"><span class="kv-key">Product</span><span class="kv-val">{t.item?.name ?? '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Brand</span><span class="kv-val">{t.item?.brand || '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Category</span><span class="kv-val">{t.item?.categoryFull || t.item?.category || '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Class</span><span class="kv-val">{t.item?.class ?? '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Listed Price</span><span class="kv-val">{t.item?.price ? `${t.item.price}` : '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Return Reason</span><span class="kv-val">{t.returnReason ?? '—'}</span></div>
+                {#if t.item?.url}<div class="kv-row"><span class="kv-key">Product Page</span><span class="kv-val"><a href={t.item.url} target="_blank" rel="noreferrer" class="item-link">View ↗</a></span></div>{/if}
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-section">
+            <div class="section-label">Customer Details</div>
+            <div class="customer-card">
+              <div class="cust-avatar">{(t.customer?.name ?? 'U').split(' ').map(n => n[0]).join('').slice(0,2)}</div>
+              <div class="cust-body">
+                <div class="cust-row">
+                  <div class="cust-main">
+                    <div class="cust-name">{t.customer?.name ?? '—'}</div>
+                    <div class="cust-tier tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</div>
+                  </div>
+                </div>
+                <div class="cust-contact">
+                  <div class="contact-item">
+                    <span class="contact-icon">✉</span>
+                    <span class="contact-val">{t.customer?.email ?? '—'}</span>
+                  </div>
+                </div>
+                <div class="cust-stats">
+                  <div class="cust-stat"><span class="cust-stat-val">{t.customer?.ltv ?? '—'}</span><span class="cust-stat-label">Est. LTV</span></div>
+                  <div class="cust-stat"><span class="cust-stat-val">{t.customer?.orders ?? '—'}</span><span class="cust-stat-label">Returns</span></div>
+                  <div class="cust-stat"><span class="cust-stat-val tier-{(t.customer?.tier ?? 'bronze').toLowerCase()}">{t.customer?.tier ?? '—'}</span><span class="cust-stat-label">Tier</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {#if uiStage === 'idle'}
+            <div class="action-bar">
+              <button class="btn-action btn-manual" on:click={handleManualClick}>✎ Manually Resolve</button>
+            </div>
+          {:else if uiStage === 'manual_selecting'}
+            <div class="detail-section resolution-section">
+              <div class="section-label">Select Resolution Action</div>
+              <div class="resolution-grid">
+                {#each RESOLUTION_OPTIONS as opt}
+                  <button class="res-option color-{opt.color}" on:click={() => handleSelectResolution(opt)}>
+                    <span class="res-icon">{opt.icon}</span>
+                    <span class="res-label">{opt.label}</span>
+                    <span class="res-desc">{opt.desc}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {:else if uiStage === 'manual_selected'}
+            <div class="detail-section resolution-section">
+              <div class="section-label">
+                Selected Resolution
+                <button class="link-btn" on:click={handleBack}>← Change</button>
+              </div>
+              <div class="selected-resolution color-{selectedResolution.color}">
+                <span class="res-icon">{selectedResolution.icon}</span>
+                <div>
+                  <div class="res-label">{selectedResolution.label}</div>
+                  <div class="res-desc">{selectedResolution.desc}</div>
+                </div>
+              </div>
+            </div>
+            <div class="action-bar">
+              <button class="btn-action btn-confirm" on:click={handleConfirm} disabled={confirmLoading}>
+                {#if confirmLoading}<span class="spinner-sm"></span> Closing…{:else}✓ Confirm & Close Ticket{/if}
+              </button>
+            </div>
+          {:else if uiStage === 'confirmed'}
+            {#if t.resolution}
+              <div class="detail-section resolution-section">
+                <div class="section-label">Resolution Applied</div>
+                <div class="selected-resolution color-{resolutionColor(t.resolution)}">
+                  <span class="res-icon">{resolutionIcon(t.resolution)}</span>
+                  <div>
+                    <div class="res-label">{resolutionLabel(t.resolution)}</div>
+                    <div class="res-desc">Persisted to Snowflake · SR_RESOLUTION = '{t.resolution}'</div>
+                  </div>
+                </div>
+              </div>
+            {/if}
+            <div class="closed-banner">✓ Ticket closed and persisted to Snowflake</div>
+          {/if}
+        </div>
+        
+      {:else}
+        <div class="detail-empty">
+          <div class="empty-icon">↩</div>
+          <div>Select a return to review</div>
+          <div class="empty-sub">Live from Snowflake · STORE_RETURNS × ITEM × REASON × CUSTOMER</div>
+        </div>
+      {/if}
+    </div>
+  </div>
 </div>
 
 <style>

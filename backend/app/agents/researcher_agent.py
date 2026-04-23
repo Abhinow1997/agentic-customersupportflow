@@ -6,7 +6,7 @@ Implements Dewey-style scaffolding: learns optimal question-answering sequences
 through multi-turn communication with Policy Agent.
 
 Core Responsibilities:
-1. Answer 5 critical questions about the return using LLM reasoning
+1. Answer the critical questions about the return using LLM reasoning
 2. Validate answers through Policy Agent communication
 3. Refine answers based on policy feedback
 4. Track confidence and validation status
@@ -17,6 +17,7 @@ Future RL Enhancement:
 - Transfer learning across product categories
 """
 from __future__ import annotations
+from datetime import datetime
 import json
 import logging
 import os
@@ -68,7 +69,7 @@ class ResearcherAgent:
     iterative communication with Policy Agent using LLM reasoning.
     """
     
-    # The 5 critical questions every return must answer
+    # The critical questions every return must answer
     CRITICAL_QUESTIONS = [
         {
             "id": 1,
@@ -96,6 +97,18 @@ class ResearcherAgent:
         },
         {
             "id": 5,
+            "question": "Can the employee visually confirm the returned package is in the original packaging and the receipt shown to customer service is authentic?",
+            "key": "visual_authenticity",
+            "context_keys": ["packaging_condition", "item_sk"],
+        },
+        {
+            "id": 6,
+            "question": "Was the returned item sent by mail or returned in-store?",
+            "key": "return_channel",
+            "context_keys": ["item_sk"],
+        },
+        {
+            "id": 7,
             "question": "Why is the customer returning the item?",
             "key": "return_reason",
             "context_keys": ["packaging_condition", "packaging_factor"],
@@ -166,10 +179,15 @@ class ResearcherAgent:
         return re.sub(r"\s+", " ", (text or "").strip()).lower()
 
     def _extract_date_phrase(self, remarks: str) -> str:
+        if not remarks:
+            return ""
+
         date_patterns = [
-            r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:,\s*\d{2,4})?\b",
-            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+            r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{2,4})?\b",
+            r"\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?(?:,\s*\d{2,4})?\b",
             r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+            r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
+            r"\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b",
         ]
         for pattern in date_patterns:
             match = re.search(pattern, remarks, flags=re.IGNORECASE)
@@ -186,12 +204,223 @@ class ResearcherAgent:
             "earlier this year",
             "a few days ago",
             "recently",
+            "this morning",
+            "tonight",
+            "last night",
         ]
         remarks_lower = remarks.lower()
         for phrase in relative_patterns:
             if phrase in remarks_lower:
                 return phrase
         return ""
+
+    def _normalize_date_fragment(self, fragment: str) -> dict[str, Any] | None:
+        text = re.sub(r"\s+", " ", (fragment or "").strip())
+        if not text:
+            return None
+
+        relative_phrases = [
+            "today",
+            "yesterday",
+            "last week",
+            "last month",
+            "this week",
+            "this month",
+            "earlier this year",
+            "a few days ago",
+            "recently",
+            "this morning",
+            "tonight",
+            "last night",
+        ]
+        lowered = text.lower()
+        for phrase in relative_phrases:
+            if phrase in lowered:
+                return {
+                    "raw_text": text,
+                    "date_provided": True,
+                    "normalized_date": None,
+                    "parse_status": "relative",
+                    "source_format": "relative_reference",
+                    "reasoning": (
+                        "Customer provided a date reference, but it is relative and "
+                        "needs an exact calendar date before Snowflake validation."
+                    ),
+                }
+
+        cleaned = text
+        cleaned = re.sub(r"(?i)\b(of)\b", " ", cleaned)
+        cleaned = re.sub(r"(?i)(\d{1,2})(st|nd|rd|th)\b", r"\1", cleaned)
+        cleaned = cleaned.replace(",", " ")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        def _parse_with_dateutil(value: str, dayfirst: bool = False, yearfirst: bool = False) -> datetime | None:
+            try:
+                from dateutil import parser as date_parser
+
+                return date_parser.parse(
+                    value,
+                    fuzzy=True,
+                    dayfirst=dayfirst,
+                    yearfirst=yearfirst,
+                )
+            except Exception:
+                return None
+
+        parsed = None
+        source_format = ""
+
+        iso_match = re.fullmatch(r"(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})", cleaned)
+        if iso_match:
+            try:
+                parsed = datetime(
+                    int(iso_match.group("year")),
+                    int(iso_match.group("month")),
+                    int(iso_match.group("day")),
+                )
+                source_format = "iso"
+            except ValueError:
+                parsed = None
+
+        if parsed is None:
+            numeric_match = re.fullmatch(
+                r"(?P<a>\d{1,4})[/-](?P<b>\d{1,2})[/-](?P<c>\d{1,4})",
+                cleaned,
+            )
+            if numeric_match:
+                first = numeric_match.group("a")
+                third = numeric_match.group("c")
+                if len(first) == 4:
+                    parsed = _parse_with_dateutil(cleaned, yearfirst=True)
+                    source_format = "numeric_year_first"
+                elif len(third) == 4:
+                    dayfirst = int(first) > 12 and int(numeric_match.group("b")) <= 12
+                    parsed = _parse_with_dateutil(cleaned, dayfirst=dayfirst)
+                    source_format = "numeric_slash_or_dash"
+                else:
+                    parsed = _parse_with_dateutil(cleaned)
+                    source_format = "numeric_short_year"
+
+        if parsed is None:
+            parsed = _parse_with_dateutil(cleaned)
+            if parsed is not None:
+                source_format = "textual_or_fallback"
+
+        if parsed is None:
+            return {
+                "raw_text": text,
+                "date_provided": True,
+                "normalized_date": None,
+                "parse_status": "unparsed",
+                "source_format": "unknown",
+                "reasoning": (
+                    "A date-like value was mentioned, but it could not be normalized "
+                    "reliably into Snowflake's YYYY-MM-DD format."
+                ),
+            }
+
+        return {
+            "raw_text": text,
+            "date_provided": True,
+            "normalized_date": parsed.date().isoformat(),
+            "parse_status": "normalized",
+            "source_format": source_format or "parsed",
+            "reasoning": (
+                "Customer remarks include a date reference that has been normalized "
+                "into Snowflake format."
+            ),
+        }
+
+    def _extract_yes_no_confirmation(self, remarks: str) -> dict[str, Any] | None:
+        normalized = self._normalize_text(remarks)
+        if not normalized:
+            return None
+
+        negative_terms = [
+            "not original packaging",
+            "no original packaging",
+            "opened package",
+            "tampered",
+            "fake receipt",
+            "not authentic",
+            "receipt is fake",
+            "receipt is not authentic",
+        ]
+        positive_package_terms = [
+            "original packaging",
+            "sealed package",
+            "unopened package",
+            "untampered package",
+        ]
+        positive_receipt_terms = [
+            "authentic receipt",
+            "receipt is authentic",
+            "valid receipt",
+            "real receipt",
+            "original receipt",
+        ]
+
+        if any(term in normalized for term in negative_terms):
+            return {
+                "answer": "No",
+                "confidence": 0.85,
+                "reasoning": "Customer remarks include a negative indicator for packaging authenticity or receipt authenticity.",
+                "evidence": remarks.strip(),
+            }
+
+        if any(term in normalized for term in positive_package_terms) and any(
+            term in normalized for term in positive_receipt_terms
+        ):
+            return {
+                "answer": "Yes",
+                "confidence": 0.84,
+                "reasoning": "Customer remarks indicate original packaging and an authentic receipt.",
+                "evidence": remarks.strip(),
+            }
+
+        return None
+
+    def _extract_return_channel(self, remarks: str) -> dict[str, Any] | None:
+        normalized = self._normalize_text(remarks)
+        if not normalized:
+            return None
+
+        mail_terms = [
+            "by mail",
+            "mailed back",
+            "return by mail",
+            "ship it back",
+            "shipped back",
+            "mail return",
+            "postal return",
+        ]
+        store_terms = [
+            "in-store",
+            "in store",
+            "store return",
+            "returned to store",
+            "dropped off at store",
+            "brought to store",
+            "customer service desk",
+        ]
+
+        if any(term in normalized for term in mail_terms):
+            return {
+                "answer": "Mail",
+                "confidence": 0.82,
+                "reasoning": "Customer remarks indicate the return was handled by mail.",
+                "evidence": remarks.strip(),
+            }
+
+        if any(term in normalized for term in store_terms):
+            return {
+                "answer": "In-store",
+                "confidence": 0.82,
+                "reasoning": "Customer remarks indicate the return was handled in-store.",
+                "evidence": remarks.strip(),
+            }
+
+        return None
 
     def _extract_answer_from_remarks(
         self,
@@ -226,19 +455,42 @@ class ResearcherAgent:
                 }
 
         elif q_key == "purchase_date":
-            date_phrase = self._extract_date_phrase(remarks_clean)
-            if date_phrase:
+            date_reference = self._normalize_date_fragment(self._extract_date_phrase(remarks_clean))
+            if date_reference and date_reference.get("normalized_date"):
                 return {
-                    "answer": date_phrase,
-                    "confidence": 0.78,
-                    "reasoning": "Customer remarks include a date reference that can be used as the purchase or delivery date.",
+                    "answer": date_reference["normalized_date"],
+                    "confidence": 0.91,
+                    "reasoning": date_reference["reasoning"],
                     "evidence": remarks_clean,
+                    "date_reference": date_reference,
+                }
+            if date_reference and date_reference.get("date_provided"):
+                return {
+                    "answer": date_reference["raw_text"],
+                    "confidence": 0.55,
+                    "reasoning": date_reference["reasoning"],
+                    "evidence": remarks_clean,
+                    "date_reference": date_reference,
                 }
 
         elif q_key == "item_category":
             item_category = str(item_lookup.get("item_category", "")).strip()
             item_category_full = str(item_lookup.get("item_category_full", "")).strip()
             item_name = str(item_lookup.get("item_name", "")).strip()
+            sales_category = ""
+            if sales_history.get("rows"):
+                first_row = sales_history["rows"][0]
+                sales_category = str(first_row.get("item_category", "")).strip()
+
+            inferred_category = item_category or item_category_full or sales_category
+            if inferred_category:
+                return {
+                    "answer": inferred_category,
+                    "confidence": 0.95,
+                    "reasoning": "Item category was inferred directly from Snowflake item or sales records.",
+                    "evidence": item_lookup.get("evidence", sales_history.get("evidence", "")) or remarks_clean,
+                    "source": "snowflake",
+                }
             if item_category and item_category.lower() in normalized:
                 return {
                     "answer": item_category,
@@ -260,6 +512,16 @@ class ResearcherAgent:
                     "reasoning": "Customer remarks mention the product name tied to the item lookup.",
                     "evidence": remarks_clean,
                 }
+
+        elif q_key == "visual_authenticity":
+            confirmation = self._extract_yes_no_confirmation(remarks_clean)
+            if confirmation:
+                return confirmation
+
+        elif q_key == "return_channel":
+            channel = self._extract_return_channel(remarks_clean)
+            if channel:
+                return channel
 
         elif q_key == "proof_of_purchase":
             if any(
@@ -343,6 +605,7 @@ class ResearcherAgent:
             "summary": "",
             "raw_remarks": remarks,
             "answers_by_key": {},
+            "date_mentions": [],
             "covered_questions": [],
             "missing_questions": [],
             "follow_up_questions": [],
@@ -372,6 +635,20 @@ class ResearcherAgent:
             ]
             return analysis
 
+        date_reference = self._normalize_date_fragment(self._extract_date_phrase(remarks))
+        if date_reference:
+            analysis["date_mentions"].append(date_reference)
+            if date_reference.get("normalized_date"):
+                analysis["summary"] = (
+                    f"Customer remarks include a date reference normalized to "
+                    f"{date_reference['normalized_date']}."
+                )
+            else:
+                analysis["summary"] = (
+                    "Customer remarks include a date reference, but it needs a more "
+                    "exact calendar value for Snowflake validation."
+                )
+
         for q_spec in self.CRITICAL_QUESTIONS:
             extracted = self._extract_answer_from_remarks(
                 q_spec=q_spec,
@@ -382,18 +659,19 @@ class ResearcherAgent:
                 item_lookup=item_lookup,
             )
             if extracted:
+                answer_source = extracted.get("source", "customer_remarks")
                 analysis["answers_by_key"][q_spec["key"]] = {
                     **extracted,
                     "question_id": q_spec["id"],
                     "question": q_spec["question"],
-                    "answer_source": "customer_remarks",
+                    "answer_source": answer_source,
                 }
                 analysis["covered_questions"].append(
                     {
                         "question_id": q_spec["id"],
                         "question": q_spec["question"],
                         "answer": extracted["answer"],
-                        "answer_source": "customer_remarks",
+                        "answer_source": answer_source,
                     }
                 )
             else:
@@ -445,14 +723,20 @@ class ResearcherAgent:
         checks: list[dict[str, Any]] = []
 
         if remarks_answer:
+            source_name = "SNOWFLAKE" if remarks_answer.get("source") == "snowflake" else "CUSTOMER_REMARKS"
+            source_ref = "Snowflake.ITEM/STORE_SALES" if source_name == "SNOWFLAKE" else "request.customer_remarks"
             checks.append(
                 self._make_source_check(
-                    source_name="CUSTOMER_REMARKS",
+                    source_name=source_name,
                     status="compliant",
-                    exact_issue="Customer remarks supplied the base answer for this question.",
+                    exact_issue=(
+                        "Item category was inferred from Snowflake item or sales records."
+                        if source_name == "SNOWFLAKE"
+                        else "Customer remarks supplied the base answer for this question."
+                    ),
                     evidence=remarks_answer.get("evidence", remarks_answer.get("answer", "")),
                     confidence=remarks_answer.get("confidence", 0.0),
-                    source_ref="request.customer_remarks",
+                    source_ref=source_ref,
                 )
             )
 
@@ -708,6 +992,15 @@ class ResearcherAgent:
                         "Confirmed through ITEM lookup.",
                     ),
                 }
+            elif q_spec["key"] == "item_category" and sales_history.get("valid"):
+                sales_rows = sales_history.get("rows", [])
+                first_row = sales_rows[0] if sales_rows else {}
+                inferred_category = first_row.get("item_category") or first_row.get("item_name")
+                initial_answer = {
+                    "answer": inferred_category or "Unknown",
+                    "confidence": 0.9 if inferred_category else float(sales_history.get("confidence", 0.6)),
+                    "reasoning": "Item category was inferred from Snowflake sales records.",
+                }
             else:
                 if awaiting_user_input:
                     initial_answer = {
@@ -774,10 +1067,16 @@ class ResearcherAgent:
 
             if remarks_answer:
                 answer_source = "customer_remarks"
+                if q_spec["key"] == "item_category" and remarks_answer.get("source") == "snowflake":
+                    answer_source = "snowflake"
             elif q_spec["key"] == "purchase_date" and sales_lookup.get("valid"):
                 answer_source = "store_sales"
             elif q_spec["key"] == "item_category" and item_lookup.get("valid"):
-                answer_source = "item_lookup"
+                answer_source = "snowflake"
+            elif q_spec["key"] == "item_category" and sales_history.get("valid"):
+                answer_source = "snowflake"
+            elif q_spec["key"] in ("visual_authenticity", "return_channel") and remarks_answer:
+                answer_source = "customer_remarks"
             elif q_spec["key"] in ("seller_type", "proof_of_purchase") and sales_history.get("valid"):
                 answer_source = "store_sales"
             elif initial_answer["answer"] == "Pending customer input":
@@ -970,11 +1269,25 @@ Respond with ONLY the JSON object."""
         # Question 3: Item category
         elif q_key == "item_category":
             return {
-                "answer": f"Item SK {context['item_sk']} - category pending lookup",
-                "confidence": 0.5,
-                "reasoning": "Item category requires Snowflake ITEM table lookup"
+                "answer": str(context.get("item_category", "Unknown - requires Snowflake ITEM or STORE_SALES lookup")),
+                "confidence": 0.95 if context.get("item_category") else 0.4,
+                "reasoning": "Item category is best inferred from Snowflake ITEM or STORE_SALES records."
             }
-        
+
+        elif q_key == "visual_authenticity":
+            return {
+                "answer": "No",
+                "confidence": 0.4,
+                "reasoning": "Visual authenticity cannot be confirmed from item context alone."
+            }
+
+        elif q_key == "return_channel":
+            return {
+                "answer": "Unknown - requires customer confirmation",
+                "confidence": 0.3,
+                "reasoning": "Return channel is not provided in item context."
+            }
+
         # Question 4: Proof of purchase
         elif q_key == "proof_of_purchase":
             pkg = context.get("packaging_condition", "")
@@ -1044,7 +1357,13 @@ Respond with ONLY the JSON object."""
         
         elif q_key == "item_category":
             return f"walmart return policy category {answer}"
-        
+
+        elif q_key == "visual_authenticity":
+            return "walmart return policy original packaging receipt authenticity"
+
+        elif q_key == "return_channel":
+            return "walmart return policy mail in-store return method"
+
         elif q_key == "proof_of_purchase":
             return "walmart return policy receipt required"
         

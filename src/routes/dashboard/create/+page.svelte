@@ -5,7 +5,7 @@
   const FASTAPI = 'http://localhost:8000';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
-  let ticketType = 'return'; // 'return' | 'enquiry'
+  let ticketType = 'return';
 
   // ── Step / submit state ──────────────────────────────────────────────────
   let step = 1;
@@ -300,12 +300,11 @@
   ];
 
   // ── Step labels ───────────────────────────────────────────────────────────
-  $: stepLabels = ticketType === 'enquiry'
-    ? [{ n: 1, label: 'Enquiry Details' }]
-    : [
-        { n: 1, label: 'Customer Lookup' },
-        { n: 2, label: 'Assessment & Decision' },
-      ];
+  $: stepLabels = [
+    { n: 1, label: 'Customer Lookup' },
+    { n: 2, label: 'Assessment & Decision' },
+    { n: 3, label: 'Submit Ticket' },
+  ];
 
   // ── Derived ───────────────────────────────────────────────────────────────
   $: packagingMeta     = PACKAGING_CONDITIONS.find(p => p.id === packagingCondition);
@@ -321,9 +320,7 @@
     netLoss = (parseFloat(returnAmt) * packagingFactor).toFixed(2);
   }
 
-  $: step1Valid = ticketType === 'enquiry'
-    ? (enquiryRawMessage.trim())
-    : (lookupStatus !== '' && custName.trim());
+  $: step1Valid = lookupStatus !== '' && custName.trim();
     
   // Step 2 is valid once decision is logged
   $: step2Valid = decisionLogged;
@@ -644,7 +641,7 @@
   <header class="topbar">
     <div class="topbar-left">
       <h2>Create Ticket</h2>
-      <div class="breadcrumb">New Ticket · Manual Entry · {ticketType === 'return' ? 'Item Return' : 'Customer Enquiry'}</div>
+      <div class="breadcrumb">New Ticket · Manual Entry · Item Return</div>
     </div>
     <div class="topbar-right">
       <a href="/dashboard" class="back-link">← Back to Queue</a>
@@ -659,8 +656,7 @@
         <h3>Ticket Created Successfully</h3>
         <div class="success-id">{createdTicketId}</div>
         <p class="success-detail">
-          {ticketType === 'return' ? 'Return ticket' : 'Enquiry ticket'} for <strong>{custName}</strong> has been created.
-          {#if ticketType === 'return'}<br/>{:else}<br/>Subject: <strong>{enquirySubject}</strong>{/if}
+          Return ticket for <strong>{custName}</strong> has been created.
           <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
         </p>
         <div class="success-actions">
@@ -677,11 +673,6 @@
           <span class="type-label">Item Return</span>
           <span class="type-desc">Customer returning a purchased item</span>
         </button>
-        <button class="type-btn" class:active={ticketType === 'enquiry'} on:click={() => setTicketType('enquiry')}>
-          <span class="type-icon">💬</span>
-          <span class="type-label">Enquiry</span>
-          <span class="type-desc">Question, request or general support</span>
-        </button>
       </div>
 
       <div class="step-bar">
@@ -697,126 +688,6 @@
       <div class="form-container">
 
         {#if step === 1}
-
-          {#if ticketType === 'enquiry'}
-            <div class="form-section">
-              <div class="section-title">Input Mode</div>
-              <div class="input-mode-tabs">
-                <button class="mode-tab" class:active={enquiryInputMode === 'email'} on:click={() => enquiryInputMode = 'email'}>
-                  <span class="mode-tab-icon">✉</span>
-                  <div class="mode-tab-body">
-                    <span class="mode-tab-label">Email / Text Message</span>
-                    <span class="mode-tab-desc">Paste or type the customer's email, live chat or any written message</span>
-                  </div>
-                </button>
-                <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
-                  <span class="mode-tab-icon">🎙</span>
-                  <div class="mode-tab-body">
-                    <span class="mode-tab-label">Voicemail</span>
-                    <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            <div class="form-section">
-              <div class="section-title">Load a Demo Sample <span class="section-sub">— click any to populate the form</span></div>
-              <div class="sample-grid">
-                {#each DEMO_SAMPLES as s}
-                  <button class="sample-card" class:seller={s.senderType === 'seller'} on:click={() => applySample(s)}>
-                    <div class="sample-card-top">
-                      <span class="sample-type-badge sample-type-{s.senderType}">{s.senderType}</span>
-                      <span class="sample-label">{s.label}</span>
-                    </div>
-                    <span class="sample-from">{s.senderName}</span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-
-            {#if enquiryInputMode === 'voicemail'}
-              <div class="form-section vm-section">
-                <div class="section-title">Voicemail Recorder</div>
-
-                {#if !vmRecording && !vmAudioBlob}
-                  <div class="vm-idle">
-                    <button class="vm-record-btn" on:click={startRecording}>
-                      <span class="vm-mic-icon">🎙</span>
-                      <span>Start Recording</span>
-                    </button>
-                    <p class="vm-hint">Click to start recording. The audio will be saved to S3 and transcribed via OpenAI Whisper.</p>
-                  </div>
-                {/if}
-
-                {#if vmRecording}
-                  <div class="vm-recording">
-                    <div class="vm-pulse-ring">
-                      <div class="vm-pulse-dot"></div>
-                    </div>
-                    <div class="vm-recording-info">
-                      <span class="vm-rec-label">REC</span>
-                      <span class="vm-timer">{vmFormatDuration(vmDuration)}</span>
-                    </div>
-                    <button class="vm-stop-btn" on:click={stopRecording}>⏹ Stop Recording</button>
-                  </div>
-                {/if}
-
-                {#if vmAudioBlob && !vmRecording}
-                  <div class="vm-preview">
-                    <div class="vm-preview-header">
-                      <span class="vm-preview-label">✔ Recording captured</span>
-                      <span class="vm-preview-duration">{vmFormatDuration(vmDuration)}</span>
-                    </div>
-                    <audio src={vmAudioUrl} controls class="vm-audio-player"></audio>
-                    <div class="vm-actions">
-                      {#if enquiryRawMessage}
-                        <div class="vm-transcribed-badge">✦ Transcribed</div>
-                      {:else}
-                        <button class="btn vm-transcribe-btn" disabled={vmTranscribing} on:click={transcribeRecording}>
-                          {#if vmTranscribing}
-                            <span class="spinner-sm"></span> Transcribing…
-                          {:else}
-                            ✦ Transcribe with Whisper
-                          {/if}
-                        </button>
-                      {/if}
-                      <button class="btn btn-ghost btn-sm" on:click={discardRecording}>Discard</button>
-                    </div>
-                    {#if vmS3Key}
-                      <div class="vm-s3-badge">
-                        <span class="vm-s3-icon">☁</span>
-                        <span>Saved to S3 — <code>{vmS3Key}</code></span>
-                      </div>
-                    {/if}
-                    {#if vmTranscriptError}
-                      <div class="vm-error">⚠ {vmTranscriptError}</div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-
-              {#if enquiryRawMessage}
-                <div class="form-section">
-                  <div class="section-title-row">
-                    <div class="section-title">Transcript <span class="field-note">auto-generated — review and edit</span></div>
-                    <span class="char-count-badge">{enquiryRawMessage.length} chars</span>
-                  </div>
-                  <textarea bind:value={enquiryRawMessage} rows="8" class="message-body-area"
-                    placeholder="Transcript will appear here after Whisper processes the recording..."></textarea>
-                </div>
-              {/if}
-            {/if}
-
-            {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
-
-            <div class="step-actions">
-              <div></div>
-              <button class="btn btn-submit enquiry-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
-                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Enquiry Ticket{/if}
-              </button>
-            </div>
-
-          {:else}
             <!-- RETURN PATH -->
             <div class="form-section">
               <div class="section-title">Customer Lookup</div>
@@ -924,8 +795,14 @@
               {/if}
             </div>
 
-          {/if}
+            {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
 
+            <div class="step-actions">
+              <div></div>
+              <button class="btn btn-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
+                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Return Ticket{/if}
+              </button>
+            </div>
 
         {:else if step === 2 && ticketType === 'return'}
 
@@ -1372,13 +1249,6 @@
             {/if}
           </div>
 
-
-        {:else if step === 2 && ticketType === 'enquiry'}
-
-          <div class="form-section">
-            <div class="section-title">Enquiry form placeholder</div>
-            <p style="color: var(--text-muted);">Enquiry handling not yet implemented for step 2.</p>
-          </div>
 
         {/if}
 

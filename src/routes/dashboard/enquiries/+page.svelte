@@ -5,7 +5,7 @@
   const FASTAPI = 'http://localhost:8000';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
-  let ticketType = 'return'; // 'return' | 'enquiry'
+  let ticketType = 'enquiry';
 
   // ── Step / submit state ──────────────────────────────────────────────────
   let step = 1;
@@ -288,13 +288,7 @@ Priya`,
   ];
 
   // ── Step labels ───────────────────────────────────────────────────────────
-  $: stepLabels = ticketType === 'enquiry'
-    ? [{ n: 1, label: 'Enquiry Details' }]
-    : [
-        { n: 1, label: 'Customer & Details' },
-        { n: 2, label: 'Item & Assessment' },
-        { n: 3, label: 'Financials & Submit' },
-      ];
+  $: stepLabels = [{ n: 1, label: 'Enquiry Details' }];
 
   // ── Derived ───────────────────────────────────────────────────────────────
   $: reasonText = returnReasonText;  // alias used in review + payload
@@ -316,14 +310,9 @@ Priya`,
     ? (parseFloat(itemDetails.price) * returnQty * 0.4 * (1 + packagingFactor)).toFixed(2)
     : null;
 
-  $: step1Valid = ticketType === 'enquiry'
-    ? (enquiryRawMessage.trim())
-    : (lookupStatus !== '' && custName.trim() && complaintDesc.trim());
-  $: step2Valid = itemLookupStatus === 'found' && returnReasonText.trim() && packagingCondition;
-  // returnAmt is auto-populated so step 3 is always valid for returns once item exists
-  $: step3Valid = ticketType === 'return'
-    ? (!!itemDetails && returnAmt !== '')
-    : true;
+  $: step1Valid = enquiryRawMessage.trim();
+  $: step2Valid = true;
+  $: step3Valid = true;
 
   // ── No onMount data fetch needed for reasons ────────────────────────────────
 
@@ -446,34 +435,18 @@ Priya`,
   async function handleSubmit() {
     submitting = true; submitError = '';
     const payload = {
-      ticketType,
+      ticketType: 'enquiry',
       customer: { name: custName.trim(), email: custEmail.trim() || lookupEmail.trim(), tier: custTier, sk: custSk },
       channel, priority,
       complaintDesc: complaintDesc.trim(),   // original customer complaint notes
       packagingCondition,
       packagingFactor,
-      ...(ticketType === 'return' ? {
-        item: {
-          sk:        itemDetails?.sk,
-          rn:        itemDetails?.rn,
-          name:      itemDetails?.name,
-          category:  itemDetails?.category,
-          class:     itemDetails?.cls,
-          brand:     itemDetails?.brand,
-          price:     itemDetails?.price,
-          returnQty,
-        },
-        reasonDesc: returnReasonText.trim() || complaintDesc.trim(),
-        returnAmt:  parseFloat(returnAmt) || 0,
-        netLoss:    parseFloat(netLoss)   || 0,
-      } : {
-        enquiryCategory,
-        enquiryInputMode,
-        enquiryRawMessage:  enquiryRawMessage.trim(),
-        enquirySenderName:  enquirySenderName.trim(),
-        enquirySenderType,
-        returnAmt: 0, netLoss: 0,
-      }),
+      enquiryCategory,
+      enquiryInputMode,
+      enquiryRawMessage:  enquiryRawMessage.trim(),
+      enquirySenderName:  enquirySenderName.trim(),
+      enquirySenderType,
+      returnAmt: 0, netLoss: 0,
     };
     try {
       const res  = await fetch(`${FASTAPI}/api/tickets/create`, {
@@ -498,7 +471,7 @@ Priya`,
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
-    priority = 'medium'; ticketType = 'return';
+    priority = 'medium'; ticketType = 'enquiry';
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -509,7 +482,7 @@ Priya`,
   <header class="topbar">
     <div class="topbar-left">
       <h2>Create Ticket</h2>
-      <div class="breadcrumb">New Ticket · Manual Entry · {ticketType === 'return' ? 'Item Return' : 'Customer Enquiry'}</div>
+      <div class="breadcrumb">New Ticket · Manual Entry · Customer Enquiry</div>
     </div>
     <div class="topbar-right">
       <a href="/dashboard" class="back-link">← Back to Queue</a>
@@ -524,8 +497,8 @@ Priya`,
         <h3>Ticket Created Successfully</h3>
         <div class="success-id">{createdTicketId}</div>
         <p class="success-detail">
-          {ticketType === 'return' ? 'Return ticket' : 'Enquiry ticket'} for <strong>{custName}</strong> has been created.
-          {#if ticketType === 'return'}<br/>Reason: <strong>{reasonText}</strong>{:else}<br/>Subject: <strong>{enquirySubject}</strong>{/if}
+          Enquiry ticket for <strong>{custName}</strong> has been created.
+          <br/>Subject: <strong>{enquirySubject}</strong>
           <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
         </p>
         <div class="success-actions">
@@ -535,20 +508,6 @@ Priya`,
       </div>
 
     {:else}
-
-      <!-- Ticket type toggle -->
-      <div class="type-selector">
-        <button class="type-btn" class:active={ticketType === 'return'} on:click={() => setTicketType('return')}>
-          <span class="type-icon">↩</span>
-          <span class="type-label">Item Return</span>
-          <span class="type-desc">Customer returning a purchased item</span>
-        </button>
-        <button class="type-btn" class:active={ticketType === 'enquiry'} on:click={() => setTicketType('enquiry')}>
-          <span class="type-icon">💬</span>
-          <span class="type-label">Enquiry</span>
-          <span class="type-desc">Question, request or general support</span>
-        </button>
-      </div>
 
       <!-- Step bar -->
       <div class="step-bar">
@@ -605,6 +564,23 @@ Priya`,
                 {/each}
               </div>
             </div>
+
+            {#if enquiryInputMode === 'email'}
+              <div class="form-section">
+                <div class="section-title-row">
+                  <div class="section-title">Message Body <span class="field-note">paste or type the customer message</span></div>
+                  {#if enquiryRawMessage}
+                    <span class="char-count-badge">{enquiryRawMessage.length} chars</span>
+                  {/if}
+                </div>
+                <textarea
+                  bind:value={enquiryRawMessage}
+                  rows="8"
+                  class="message-body-area"
+                  placeholder="Paste the email, chat transcript, or customer message here..."
+                ></textarea>
+              </div>
+            {/if}
 
             {#if enquiryInputMode === 'voicemail'}
               <!-- ─── VOICEMAIL RECORDER ─── -->

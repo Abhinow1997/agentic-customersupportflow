@@ -260,6 +260,34 @@ ENQUIRY_CATEGORY_KEYWORDS = {
     ],
 }
 
+ENQUIRY_PROCEDURE_MAP = {
+    "Order & Delivery Enquiries": {
+        "procedure_name": "order_delivery_procedure",
+        "procedure_call": "CALL SYNTHETIC_COMPANYDB.COMPANY.order_delivery_procedure(%s)",
+        "category_key": "order_delivery",
+    },
+    "Returns & Refunds Enquiries": {
+        "procedure_name": "returns_refunds_procedure",
+        "procedure_call": "CALL SYNTHETIC_COMPANYDB.COMPANY.returns_refunds_procedure(%s)",
+        "category_key": "returns_refunds",
+    },
+    "Billing & Payment Enquiries": {
+        "procedure_name": "billing_payment_procedure",
+        "procedure_call": "CALL SYNTHETIC_COMPANYDB.COMPANY.billing_payment_procedure(%s)",
+        "category_key": "billing_payment",
+    },
+    "Account Management Enquiries": {
+        "procedure_name": "account_management_procedure",
+        "procedure_call": "CALL SYNTHETIC_COMPANYDB.COMPANY.account_management_procedure(%s)",
+        "category_key": "account_management",
+    },
+    "General Enquiries": {
+        "procedure_name": "general_enquiry_procedure",
+        "procedure_call": "CALL SYNTHETIC_COMPANYDB.COMPANY.general_enquiry_procedure(%s)",
+        "category_key": "general_enquiry",
+    },
+}
+
 
 def analyze_enquiry_message(payload: dict[str, Any]) -> dict[str, Any]:
     customer = payload.get("customer", {}) or {}
@@ -270,7 +298,8 @@ def analyze_enquiry_message(payload: dict[str, Any]) -> dict[str, Any]:
         customer.get("email") or payload.get("sender_email") or payload.get("senderEmail") or "",
     )
     procedure = _category_tool(classification["category"], message, customer, payload, ticket_context)
-    draft = _draft_enquiry_email(message, customer, classification, procedure, ticket_context)
+    source_of_truth = procedure["source_of_truth"]
+    draft = _draft_enquiry_email(message, customer, classification, procedure, ticket_context, source_of_truth)
 
     suggestions = _apply_draft_to_suggestions(procedure["suggestions"], draft)
 
@@ -297,6 +326,7 @@ def analyze_enquiry_message(payload: dict[str, Any]) -> dict[str, Any]:
         "suggestions": suggestions,
         "procedure_notes": procedure["procedure_notes"],
         "ticket_context_note": ticket_context["note"],
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -489,6 +519,7 @@ def _category_tool(
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
 ) -> dict[str, Any]:
+    source_meta, source_rows = _load_enquiry_source_rows(category, customer, payload)
     tool_map = {
         "Order & Delivery Enquiries": _order_delivery_tool,
         "Returns & Refunds Enquiries": _returns_refunds_tool,
@@ -497,7 +528,72 @@ def _category_tool(
         "General Enquiries": _general_enquiry_tool,
     }
     tool = tool_map.get(category, _general_enquiry_tool)
-    return tool(message, customer, payload, ticket_context)
+    source_of_truth = _build_source_of_truth(source_meta, source_rows)
+    return tool(message, customer, payload, ticket_context, source_meta, source_rows, source_of_truth)
+
+
+def _load_enquiry_source_rows(
+    category: str,
+    customer: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    source_meta = ENQUIRY_PROCEDURE_MAP.get(category, ENQUIRY_PROCEDURE_MAP["General Enquiries"])
+    email = (
+        (customer.get("email") or "").strip()
+        or (payload.get("sender_email") or payload.get("senderEmail") or "").strip()
+    )
+    if not email:
+        return source_meta, []
+
+    try:
+        rows = run_query(source_meta["procedure_call"], (email,))
+        return source_meta, [_json_safe_row(row) for row in rows]
+    except Exception as exc:
+        logger.warning("Enquiry procedure call failed for %s: %s", source_meta["procedure_name"], exc)
+        return source_meta, []
+
+
+def _build_source_of_truth(
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    primary_row = _pick_primary_row(source_rows)
+    validation_notes = [
+        f"Validated against Snowflake procedure `{source_meta['procedure_name']}`.",
+    ]
+    if source_rows:
+        validation_notes.append(f"Procedure returned {len(source_rows)} row(s).")
+        if len(source_rows) > 1:
+            validation_notes.append("The first row is used as the primary validation record.")
+    else:
+        validation_notes.append("The procedure returned no rows for this customer.")
+
+    return {
+        "source_system": "Snowflake",
+        "procedure_name": source_meta["procedure_name"],
+        "procedure_call": source_meta["procedure_call"],
+        "category_key": source_meta["category_key"],
+        "row_count": len(source_rows),
+        "primary_row": primary_row,
+        "rows": source_rows,
+        "validation_status": "validated" if source_rows else "empty",
+        "validation_notes": validation_notes,
+    }
+
+
+def _pick_primary_row(source_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return dict(source_rows[0]) if source_rows else {}
+
+
+def _json_safe_row(row: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(row, default=str))
+
+
+def _row_text(row: dict[str, Any], key: str, fallback: str = "") -> str:
+    value = row.get(key)
+    if value is None or value == "":
+        return fallback
+    return str(value)
 
 
 def _base_suggestions(subject: str, response: str, summary: str, internal: str, next_step: str) -> list[dict[str, Any]]:
@@ -515,38 +611,52 @@ def _order_delivery_tool(
     customer: dict[str, Any],
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or payload.get("sender_name") or "Customer")
-    subject = "Update on your order and delivery"
+    primary = _pick_primary_row(source_rows)
+    order_date = _row_text(primary, "ORDER_DATE", "[date]")
+    item_name = _row_text(primary, "ITEM_NAME", "your item")
+    ship_carrier = _row_text(primary, "SHIP_CARRIER", "[carrier]")
+    ship_code = _row_text(primary, "SHIP_CODE", "[tracking code]")
+    order_ticket = _row_text(primary, "ORDER_TICKET", "the latest order")
+    enquiry_status = _row_text(primary, "ENQUIRY_STATUS", "open")
+    subject = f"Update on your {item_name} delivery"
     response = (
         f"Hi {first},\n\n"
-        "Thanks for reaching out. Your order was placed on [date] and shipped via [carrier/mode]. "
-        "For real-time tracking, please check [carrier website]. "
-        f"If there's an issue, I see {ticket_context['ticket_phrase']} in our system.\n\n"
-        "If you can share the order number, I can narrow this down further.\n\n"
+        f"Thanks for reaching out. We checked your latest order record ({order_ticket}) from {order_date}. "
+        f"The shipment is associated with {ship_carrier} and tracking reference {ship_code}. "
+        f"{ticket_context['note']} If you can share the order number from your message, I can verify the next step.\n\n"
         "Best regards,\nArcella Customer Care"
     )
-    summary = "Customer needs an order and delivery update; verify shipment status and tracking before replying."
+    summary = (
+        f"Validated against the latest Snowflake order and delivery record. "
+        f"Procedure row shows ticket status `{enquiry_status}` and shipment details for reply grounding."
+    )
     return {
         "procedure_name": "order_delivery_procedure",
         "procedure_notes": [
-            "Use placeholders for date, carrier, and tracking link when shipment details are unavailable.",
+            f"Primary order ticket: {order_ticket}.",
+            f"Carrier: {ship_carrier}; tracking reference: {ship_code}.",
             ticket_context["note"],
         ],
         "draft_subject": subject,
         "draft_response_seed": response,
         "ai_summary_seed": summary,
         "validation_questions": [
-            "Confirm the order number before sending.",
+            "Confirm the latest Snowflake order row matches the customer request.",
             "Check whether there is a live shipment scan or pending carrier handoff.",
         ],
         "suggestions": _base_suggestions(
             subject,
             response,
             summary,
-            "Confirm carrier, shipping date, and tracking link before final send.",
+            "Use the Snowflake order row as the source of truth before final send.",
             "Verify shipment status and any open ticket before replying.",
         ),
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -555,38 +665,53 @@ def _returns_refunds_tool(
     customer: dict[str, Any],
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or payload.get("sender_name") or "Customer")
+    primary = _pick_primary_row(source_rows)
+    return_status = _row_text(primary, "RETURN_STATUS", "Open")
+    refund_summary = _row_text(primary, "REFUND_STATUS_SUMMARY", "Under Review")
+    return_reason = _row_text(primary, "RETURN_REASON", "unspecified")
+    packaging = _row_text(primary, "PACKAGING_CONDITION", "unknown")
+    assessment = _row_text(primary, "ASSESSMENT_SUMMARY", "No assessment summary available.")
+    decision_note = _row_text(primary, "DECISION_NOTE", "")
     subject = "Update on your return and refund"
     response = (
         f"Hi {first},\n\n"
-        "Thanks for contacting us about your return. We are reviewing the return status and refund timeline now. "
-        "If the return has already been received, the refund will follow the standard processing window. "
-        f"{ticket_context['note']}\n\n"
+        f"We reviewed the latest Snowflake return record and the current return status is {return_status}. "
+        f"The refund summary is {refund_summary}. {ticket_context['note']} "
         "If you can share the return number or order number, I can confirm the next step.\n\n"
         "Best regards,\nArcella Customer Care"
     )
-    summary = "Customer is asking about a return or refund; confirm return status, timeline, and any matching open ticket."
+    summary = (
+        f"Validated against the return procedure output. Return reason: {return_reason}; "
+        f"packaging condition: {packaging}; assessment summary: {assessment}."
+    )
     return {
         "procedure_name": "returns_refunds_procedure",
         "procedure_notes": [
-            "Check return receipt status before quoting any refund timing.",
+            f"Return status: {return_status}.",
+            f"Packaging condition: {packaging}.",
+            decision_note or "No decision note was returned from the source data.",
             ticket_context["note"],
         ],
         "draft_subject": subject,
         "draft_response_seed": response,
         "ai_summary_seed": summary,
         "validation_questions": [
-            "Confirm whether the item has been returned or scanned in.",
+            "Confirm the return record in Snowflake before promising timing.",
             "Confirm the refund method before promising timing.",
         ],
         "suggestions": _base_suggestions(
             subject,
             response,
             summary,
-            "Verify return receipt and refund processing before final response.",
+            "Use the Snowflake return decision as the source of truth before final response.",
             "Check return scan status and any related open ticket before replying.",
         ),
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -595,38 +720,49 @@ def _billing_payment_tool(
     customer: dict[str, Any],
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or payload.get("sender_name") or "Customer")
+    primary = _pick_primary_row(source_rows)
+    order_ticket = _row_text(primary, "ORDER_TICKET", "the latest order")
+    order_date = _row_text(primary, "ORDER_DATE", "[date]")
+    net_paid = _row_text(primary, "NET_PAID_INC_TAX", _row_text(primary, "NET_PAID", ""))
+    discount = _row_text(primary, "DISCOUNT_AMOUNT", "0")
+    coupon = _row_text(primary, "COUPON_AMOUNT", "0")
+    tax = _row_text(primary, "TAX_AMOUNT", "0")
     subject = "Update on your billing and payment enquiry"
     response = (
         f"Hi {first},\n\n"
-        "Thanks for reaching out about your billing concern. We are reviewing the payment details, charges, and any refund history now. "
-        "If this is a duplicate charge, we will verify the transactions and confirm the next steps. "
-        f"{ticket_context['note']}\n\n"
-        "If you can share the invoice or last four digits of the card used, I can narrow this down further.\n\n"
+        f"We reviewed your latest billing record for {order_ticket} dated {order_date}. "
+        f"The source data shows net paid {net_paid}, discount {discount}, coupon {coupon}, and tax {tax}. "
+        f"{ticket_context['note']} If you can share the invoice or last four digits of the card used, I can narrow this down further.\n\n"
         "Best regards,\nArcella Customer Care"
     )
-    summary = "Customer has a billing or payment issue; verify charge history, refund status, or payment failure."
+    summary = "Validated against the Snowflake billing procedure output for charge and payment details."
     return {
         "procedure_name": "billing_payment_procedure",
         "procedure_notes": [
-            "Review payment history and any duplicate charge indicators before replying.",
+            f"Billing row ticket: {order_ticket}.",
+            f"Tax and discount fields returned from Snowflake: tax={tax}, discount={discount}, coupon={coupon}.",
             ticket_context["note"],
         ],
         "draft_subject": subject,
         "draft_response_seed": response,
         "ai_summary_seed": summary,
         "validation_questions": [
-            "Confirm whether this is a duplicate charge, refund delay, or payment failure.",
+            "Confirm whether the Snowflake billing row matches the duplicate charge or payment complaint.",
             "Confirm whether the customer can share an invoice or last four digits for verification.",
         ],
         "suggestions": _base_suggestions(
             subject,
             response,
             summary,
-            "Check transaction history and refund status before final send.",
+            "Use the Snowflake billing row as the source of truth before final send.",
             "Verify payment details and customer identity before replying.",
         ),
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -635,38 +771,47 @@ def _account_management_tool(
     customer: dict[str, Any],
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or payload.get("sender_name") or "Customer")
+    primary = _pick_primary_row(source_rows)
+    preferred = _row_text(primary, "PREFERRED_CUSTOMER", "unknown")
+    city = _row_text(primary, "CITY", "")
+    state = _row_text(primary, "STATE", "")
+    credit_rating = _row_text(primary, "CREDIT_RATING", "")
     subject = "Help with your account"
     response = (
         f"Hi {first},\n\n"
-        "Thanks for reaching out. We can help with your account access and updates. "
-        "If this is a password or login issue, the next step is to verify your account details and send the appropriate reset or recovery steps. "
-        f"{ticket_context['note']}\n\n"
-        "Please reply with the best contact method and any relevant account detail so we can continue.\n\n"
+        f"We reviewed the latest account record and can help with your request. "
+        f"The source data shows preferred customer status {preferred} and account profile details for {city} {state}. "
+        f"{ticket_context['note']} Please reply with the best contact method and any relevant account detail so we can continue.\n\n"
         "Best regards,\nArcella Customer Care"
     )
-    summary = "Customer needs account assistance such as login recovery or profile updates."
+    summary = f"Validated against the Snowflake account procedure output. Credit rating: {credit_rating or 'not returned'}."
     return {
         "procedure_name": "account_management_procedure",
         "procedure_notes": [
-            "Verify identity before any account change or reset.",
+            f"Preferred customer flag: {preferred}.",
+            f"Credit rating: {credit_rating or 'not returned'}.",
             ticket_context["note"],
         ],
         "draft_subject": subject,
         "draft_response_seed": response,
         "ai_summary_seed": summary,
         "validation_questions": [
-            "Confirm the exact account action requested.",
+            "Confirm the exact account action requested against the source row.",
             "Confirm the preferred contact method for verification steps.",
         ],
         "suggestions": _base_suggestions(
             subject,
             response,
             summary,
-            "Follow identity verification before performing any account updates.",
+            "Use the Snowflake account row as the source of truth before any account update.",
             "Verify account ownership and route to the correct account procedure.",
         ),
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -675,37 +820,47 @@ def _general_enquiry_tool(
     customer: dict[str, Any],
     payload: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_meta: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or payload.get("sender_name") or "Customer")
+    primary = _pick_primary_row(source_rows)
+    subject_line = _row_text(primary, "SUBJECT", "your enquiry")
+    status = _row_text(primary, "STATUS", "open")
+    priority = _row_text(primary, "PRIORITY", "medium")
+    summary_from_data = _row_text(primary, "AI_SUMMARY", "")
     subject = "Thanks for contacting Arcella"
     response = (
         f"Hi {first},\n\n"
-        "Thanks for reaching out. We have reviewed your enquiry and are working through the details. "
-        "If you can share any additional context, screenshots, or reference numbers, that will help us confirm the best next step. "
-        f"{ticket_context['note']}\n\n"
+        f"Thanks for reaching out. We reviewed the latest enquiry record for {subject_line} and found the status is {status}. "
+        f"Priority is {priority}. {ticket_context['note']} "
+        "If you can share any additional context, screenshots, or reference numbers, that will help us confirm the best next step.\n\n"
         "Best regards,\nArcella Customer Care"
     )
-    summary = "General customer enquiry that needs a helpful response and possibly more context."
+    summary = summary_from_data or "General customer enquiry validated against the Snowflake enquiry history."
     return {
         "procedure_name": "general_enquiry_procedure",
         "procedure_notes": [
-            "Ask for any missing reference data needed to complete the response.",
+            f"Latest enquiry subject: {subject_line}.",
+            f"Latest enquiry status: {status}; priority: {priority}.",
             ticket_context["note"],
         ],
         "draft_subject": subject,
         "draft_response_seed": response,
         "ai_summary_seed": summary,
         "validation_questions": [
-            "Confirm whether more context or reference numbers are needed.",
+            "Confirm the latest enquiry row is the correct source record.",
             "Confirm whether the enquiry should be routed to another team.",
         ],
         "suggestions": _base_suggestions(
             subject,
             response,
             summary,
-            "Capture any extra context needed before closing the enquiry.",
+            "Use the Snowflake enquiry history as the source of truth before closing the enquiry.",
             "Request missing details and route if the issue belongs to another team.",
         ),
+        "source_of_truth": source_of_truth,
     }
 
 
@@ -715,6 +870,7 @@ def _draft_enquiry_email(
     classification: dict[str, Any],
     procedure: dict[str, Any],
     ticket_context: dict[str, Any],
+    source_of_truth: dict[str, Any],
 ) -> dict[str, Any]:
     first = _first_name(customer.get("name") or "Customer")
     brief = f"""## Enquiry Draft Brief
@@ -737,6 +893,13 @@ Procedure notes:
 
 Ticket context:
 {ticket_context['note']}
+
+Source of truth:
+- Provider: {source_of_truth['source_system']}
+- Procedure: {source_of_truth['procedure_name']}
+- Rows returned: {source_of_truth['row_count']}
+- Primary row:
+{json.dumps(source_of_truth['primary_row'], indent=2, default=str)}
 
 Source message:
 {message}

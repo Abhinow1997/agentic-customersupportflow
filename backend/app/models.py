@@ -64,6 +64,19 @@ class EnquiryClassification(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class EnquirySourceOfTruth(BaseModel):
+    source_system: str = Field("Snowflake", alias="sourceSystem")
+    procedure_name: str = Field("", alias="procedureName")
+    procedure_call: str = Field("", alias="procedureCall")
+    row_count: int = Field(0, alias="rowCount")
+    primary_row: dict[str, Any] = Field(default_factory=dict, alias="primaryRow")
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    validation_status: str = Field("validated", alias="validationStatus")
+    validation_notes: list[str] = Field(default_factory=list, alias="validationNotes")
+
+    model_config = {"populate_by_name": True}
+
+
 class EnquiryAnalyzeRequest(BaseModel):
     customer: EnquiryCustomerContext
     channel: Literal["email", "voicemail", "chat"] = "email"
@@ -72,7 +85,6 @@ class EnquiryAnalyzeRequest(BaseModel):
     sender_name: str = Field("", alias="senderName")
     sender_email: str = Field("", alias="senderEmail")
     sender_type: str = Field("customer", alias="senderType")
-    voicemail_s3_key: str = Field("", alias="voicemailS3Key")
     voicemail_duration_sec: float = Field(0.0, alias="voicemailDurationSec")
     email_thread_id: str = Field("", alias="emailThreadId")
     ticket_ref: str = Field("", alias="ticketRef")
@@ -89,6 +101,7 @@ class EnquiryAnalyzeResponse(BaseModel):
     suggestions: list[EnquirySuggestion] = Field(default_factory=list)
     procedure_notes: list[str] = Field(default_factory=list, alias="procedureNotes")
     ticket_context_note: str = Field("", alias="ticketContextNote")
+    source_of_truth: EnquirySourceOfTruth = Field(default_factory=EnquirySourceOfTruth, alias="sourceOfTruth")
 
     model_config = {"populate_by_name": True}
 
@@ -103,7 +116,6 @@ class EnquiryCreateRequest(BaseModel):
     draft_response: str = Field("", alias="draftResponse")
     ai_summary: str = Field("", alias="aiSummary")
     suggestions: list[EnquirySuggestion] = Field(default_factory=list)
-    voicemail_s3_key: str = Field("", alias="voicemailS3Key")
     voicemail_duration_sec: float = Field(0.0, alias="voicemailDurationSec")
     email_thread_id: str = Field("", alias="emailThreadId")
     assigned_to: str = Field("", alias="assignedTo")

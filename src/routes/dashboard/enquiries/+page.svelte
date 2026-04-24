@@ -72,8 +72,6 @@
   let vmDurationTimer    = null;    // setInterval handle
   let vmTranscribing     = false;   // waiting for Whisper response
   let vmTranscriptError  = '';
-  let vmS3Url            = '';      // S3 URL returned after upload
-  let vmS3Key            = '';
 
   async function startRecording() {
     try {
@@ -83,7 +81,6 @@
       vmAudioUrl    = '';
       vmDuration    = 0;
       vmTranscriptError = '';
-      vmS3Url = ''; vmS3Key = '';
 
       vmMediaRecorder = new MediaRecorder(stream);
       vmMediaRecorder.ondataavailable = e => { if (e.data.size > 0) vmAudioChunks.push(e.data); };
@@ -116,7 +113,6 @@
     vmDuration  = 0;
     vmAudioChunks = [];
     vmTranscriptError = '';
-    vmS3Url = ''; vmS3Key = '';
   }
 
   async function transcribeRecording() {
@@ -131,9 +127,6 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       enquiryRawMessage = data.transcript ?? '';
-      vmS3Url = data.s3_url ?? '';
-      vmS3Key = data.s3_key ?? '';
-      if (data.s3_error) console.warn('S3 warning:', data.s3_error);
     } catch (e) {
       vmTranscriptError = e.message;
     } finally {
@@ -145,108 +138,81 @@
 
   const DEMO_SAMPLES = [
     {
-      label: 'Order Not Received',
+      label: 'Order Delivery',
       senderType: 'customer',
-      senderName: 'Sarah Thompson',
-      senderEmail: 'sarah.t@gmail.com',
-      subject: 'My order hasn\'t arrived — tracking stuck for 3 days',
+      senderName: 'William Miller',
+      senderEmail: 'william.miller@b4ocupgkemhpapf.com',
+      subject: 'Can you check order #47276464?',
       body: `Hi,
 
-I placed order #WM-8821 six days ago and I still haven't received it. The tracking page hasn't updated in 3 days and just says "In Transit".
+I placed an order for Savor Rice Imported Long Grain Jasmine 20 lb on April 23rd, order #47276464. It was supposed to ship overnight via Great Eastern, but I still have not received it and tracking has not updated.
 
-Could someone please look into this urgently? I needed this item by the weekend.
-
-Thank you,
-Sarah Thompson`,
-    },
-    {
-      label: 'Billing Double Charge',
-      senderType: 'customer',
-      senderName: 'Jennifer Walsh',
-      senderEmail: 'j.walsh@hotmail.com',
-      subject: 'Duplicate charge on my account — need immediate refund',
-      body: `Hello,
-
-I was charged $149.99 twice for my subscription renewal on March 10th. I only authorised one payment. My bank statement clearly shows two identical transactions.
-
-Please refund the duplicate charge as soon as possible.
-
-Regards,
-Jennifer Walsh
-Account: jennifer.w@hotmail.com`,
-    },
-    {
-      label: 'Wrong Item Delivered',
-      senderType: 'customer',
-      senderName: 'Marcus Reid',
-      senderEmail: 'marcusreid22@gmail.com',
-      subject: 'Received wrong product — Order #WM-9034',
-      body: `Hi there,
-
-I ordered a Blue 12-Cup Coffee Maker (Model CM-200) but received a Red 8-Cup version instead. This was meant as a birthday gift and I'm very disappointed.
-
-Order #WM-9034 — placed on March 8th.
-
-I'd like either the correct item sent to me or a full refund. Please advise on next steps.
+Can you please look into this and let me know the current delivery status?
 
 Thanks,
-Marcus`,
+William Miller`,
     },
     {
-      label: 'Seller — Product Delisted',
-      senderType: 'seller',
-      senderName: 'TechGadget Supplies',
-      senderEmail: 'ops@techgadgetsupplies.com',
-      subject: 'Product listings removed without notice — urgent reinstatement needed',
-      body: `Dear Support Team,
+      label: 'Returns & Refunds',
+      senderType: 'customer',
+      senderName: 'Sarah Chappell',
+      senderEmail: 'sarah.chappell@bgugbsrl.org',
+      subject: 'Refund status for return #991072858547',
+      body: `Hello,
 
-This is the operations team at TechGadget Supplies. Three of our active product listings have been removed without any notification or explanation.
+I returned a Dogs My Love 6ft Long Neoprene Padded Handle Nylon Leash under return #991072858547 because the package arrived damaged. The return amount is $39.98 and the status still shows Open.
 
-Affected Product IDs: TG-441, TG-445, TG-502
-
-These listings were compliant with all marketplace guidelines. We are losing significant daily revenue and need this escalated urgently.
-
-Please advise on why they were removed and provide a timeline for reinstatement.
-
-Best regards,
-David Chen
-Operations Manager — TechGadget Supplies`,
-    },
-    {
-      label: 'Seller — Payout Delay',
-      senderType: 'seller',
-      senderName: 'Sunrise Electronics',
-      senderEmail: 'accounts@sunriseelectronics.co',
-      subject: 'February seller payout still not received — $3,420 outstanding',
-      body: `Dear Accounts Team,
-
-My seller payout for February has not been processed. The expected settlement date was February 28th and it is now March 13th — two weeks overdue.
-
-Outstanding amount: $3,420.00
-Seller Account ID: SE-00482
-
-I have raised this through the portal twice with no response. Please treat this as urgent.
+It has been a while since I sent it back. Could you please check the refund status and let me know when I can expect the money back?
 
 Regards,
-David Chen
-Sunrise Electronics`,
+Sarah Chappell`,
     },
     {
-      label: 'Promo Code Not Applied',
+      label: 'Billing & Payment',
       senderType: 'customer',
-      senderName: 'Priya Nair',
-      senderEmail: 'priya.nair@outlook.com',
-      subject: 'Promo code SAVE20 not applied to my order',
+      senderName: 'Daisy Evans',
+      senderEmail: 'daisy.evans@9nvndd34q.edu',
+      subject: 'Question about the charges on order #1255359309',
       body: `Hi,
 
-I used promo code SAVE20 at checkout on March 11th but my final order total wasn't reduced. I was charged the full price of $89.99 instead of the expected $71.99.
+I'm writing about order #1255359309 for a Clam Outdoors Fleece Liner Jacket.
 
-Order confirmation number: #WM-9187
+The listed price was $89.94 but I was charged $7,461.69 after tax. The receipt also shows a discount of $1,455.45, but the final amount still seems too high for a single jacket.
 
-Can you please apply the discount retroactively or issue a partial refund of $18.00?
+Can you please review the billing on this order? I believe there may be a pricing error.
+
+Thanks,
+Daisy Evans`,
+    },
+    {
+      label: 'Account Management',
+      senderType: 'customer',
+      senderName: 'David Lucas',
+      senderEmail: 'david.lucas@f5hja3bfk67k14t39k.com',
+      subject: 'Need to update my shipping address',
+      body: `Hi,
+
+I recently moved and need to update my shipping address. My current address on file is 573 6th Pine, Woodville, MI 44289, but I have relocated to 210 Oak Avenue, Grand Rapids, MI 49503.
+
+Could you also confirm that my preferred customer status is still active?
+
+Thanks,
+David Lucas`,
+    },
+    {
+      label: 'General Enquiry',
+      senderType: 'customer',
+      senderName: 'User 7',
+      senderEmail: 'test7@test.com',
+      subject: 'Question about my CAT007 gift card',
+      body: `Hi,
+
+I received a gift card as a birthday present, but I am having trouble redeeming it at checkout. The code keeps showing an invalid card error.
+
+My ticket number is CAT007. Can someone help me figure out what is going on?
 
 Thank you,
-Priya`,
+User 7`,
     },
   ];
 
@@ -428,36 +394,176 @@ Priya`,
     enquiryAnalysisLoading = true;
     enquiryAnalysisError = '';
     try {
-      const response = await fetch(`${FASTAPI_URL}/api/enquiry/analyze`, {
+      const enquiryPayload = buildEnquiryAnalysisPayload();
+      let response = await fetch(`${FASTAPI_URL}/api/enquiry/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer: {
-            name: custName.trim() || enquirySenderName.trim() || 'Customer',
-            email: custEmail.trim() || lookupEmail.trim() || enquirySenderEmail.trim(),
-            tier: custTier,
-            sk: custSk,
-          },
-          channel: enquiryInputMode,
-          subject: enquirySubject.trim(),
-          body: enquiryRawMessage.trim(),
-          senderName: enquirySenderName.trim(),
-          senderEmail: enquirySenderEmail.trim(),
-          senderType: enquirySenderType,
-          voicemailS3Key: vmS3Key,
-          voicemailDurationSec: vmDuration,
-          emailThreadId: '',
-          ticketRef: `enquiry-${Date.now()}`,
-        }),
+        body: JSON.stringify(enquiryPayload),
       });
-      const data = await response.json();
+      let data = await response.json();
+
+      if (response.status === 404) {
+        response = await fetch(`${FASTAPI_URL}/api/analyze/ticket`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildLegacyAnalyzePayload(enquiryPayload)),
+        });
+        data = await response.json();
+        if (!response.ok) throw new Error(formatApiError(data, `HTTP ${response.status}`));
+        enquiryAnalysisResult = normalizeLegacyAnalysisResult(data, enquiryPayload);
+        return;
+      }
+
       if (!response.ok) throw new Error(formatApiError(data, `HTTP ${response.status}`));
-      enquiryAnalysisResult = data;
+      enquiryAnalysisResult = normalizeEnquiryAnalysisResult(data, enquiryPayload);
     } catch (err) {
       enquiryAnalysisError = err.message;
     } finally {
       enquiryAnalysisLoading = false;
     }
+  }
+
+  function buildEnquiryAnalysisPayload() {
+    return {
+      customer: {
+        name: custName.trim() || enquirySenderName.trim() || 'Customer',
+        email: custEmail.trim() || lookupEmail.trim() || enquirySenderEmail.trim(),
+        tier: custTier,
+        sk: custSk,
+      },
+      channel: enquiryInputMode,
+      subject: enquirySubject.trim(),
+      body: enquiryRawMessage.trim(),
+      senderName: enquirySenderName.trim(),
+      senderEmail: enquirySenderEmail.trim(),
+      senderType: enquirySenderType,
+      voicemailDurationSec: vmDuration,
+      emailThreadId: '',
+      ticketRef: `enquiry-${Date.now()}`,
+    };
+  }
+
+  function buildLegacyAnalyzePayload(enquiryPayload) {
+    return {
+      ticket_id: enquiryPayload.ticketRef,
+      return_reason: enquiryPayload.body,
+      return_amt: '0',
+      net_loss: '0',
+      customer: {
+        name: enquiryPayload.customer.name,
+        email: enquiryPayload.customer.email,
+        tier: enquiryPayload.customer.tier,
+        ltv: '0',
+        orders: 0,
+      },
+      item: {
+        name: enquiryPayload.subject || 'Enquiry',
+        category: enquiryCategory || 'General Enquiries',
+        class: '',
+        price: '0',
+        return_qty: 1,
+      },
+    };
+  }
+
+  function normalizeEnquiryAnalysisResult(data, enquiryPayload) {
+    if (!data || typeof data !== 'object') return null;
+    const fallbackSubject = enquiryPayload.subject ? `Re: ${enquiryPayload.subject}` : 'Re: Your enquiry';
+
+    if (data.classification) {
+      return {
+        ...data,
+        classification: {
+          category: data.classification.category ?? 'General Enquiries',
+          subcategory: data.classification.subcategory ?? 'General',
+          priority: data.classification.priority ?? 'Medium',
+          confidence: Number(data.classification.confidence ?? 0),
+          sentimentLabel: data.classification.sentimentLabel ?? data.classification.sentiment_label ?? 'Neutral',
+          sentimentScore: Number(data.classification.sentimentScore ?? data.classification.sentiment_score ?? 0),
+          urgencyScore: Number(data.classification.urgencyScore ?? data.classification.urgency_score ?? 1),
+          procedureName: data.classification.procedureName ?? data.classification.procedure_name ?? '',
+          openTicketStatus: data.classification.openTicketStatus ?? data.classification.open_ticket_status ?? '',
+          openTicketCount: Number(data.classification.openTicketCount ?? data.classification.open_ticket_count ?? 0),
+          validationQuestions: Array.isArray(data.classification.validationQuestions ?? data.classification.validation_questions)
+            ? (data.classification.validationQuestions ?? data.classification.validation_questions)
+            : [],
+        },
+        draftSubject: data.draftSubject ?? data.draft_subject ?? fallbackSubject,
+        draftResponse: data.draftResponse ?? data.draft_response ?? enquiryPayload.body,
+        aiSummary: data.aiSummary ?? data.ai_summary ?? '',
+        suggestions: Array.isArray(data.suggestions) ? data.suggestions : [],
+        procedureNotes: Array.isArray(data.procedureNotes) ? data.procedureNotes : (Array.isArray(data.procedure_notes) ? data.procedure_notes : []),
+        ticketContextNote: data.ticketContextNote ?? data.ticket_context_note ?? '',
+        sourceOfTruth: normalizeSourceOfTruth(data.sourceOfTruth ?? data.source_of_truth),
+      };
+    }
+
+    return {
+      classification: {
+        category: data.category ?? data.routing?.primaryDepartment ?? 'General Enquiries',
+        subcategory: data.subcategory ?? data.triage?.actionLabel ?? 'General',
+        priority: data.priority ?? data.routing?.priority ?? 'Medium',
+        confidence: Number(data.confidence ?? data.supervisor?.confidenceScore ?? 0),
+      },
+      draftSubject: data.draftSubject ?? data.draft_subject ?? fallbackSubject,
+      draftResponse: data.draftResponse ?? data.response?.draftResponse ?? '',
+      aiSummary: data.aiSummary ?? data.routing?.handlingInstructions ?? data.triage?.actionRationale ?? '',
+      suggestions: normalizeLegacySuggestions(data),
+      sourceOfTruth: normalizeSourceOfTruth(data.sourceOfTruth ?? data.source_of_truth),
+    };
+  }
+
+  function normalizeLegacyAnalysisResult(data, enquiryPayload) {
+    return normalizeEnquiryAnalysisResult(data, enquiryPayload);
+  }
+
+  function normalizeLegacySuggestions(data) {
+    const suggestions = [];
+    const pushSuggestion = (label, description) => {
+      if (description && String(description).trim()) {
+        suggestions.push({ label, description: String(description).trim(), selected: true });
+      }
+    };
+
+    pushSuggestion('Triage rationale', data?.triage?.actionRationale);
+    pushSuggestion('Handling instructions', data?.routing?.handlingInstructions);
+    pushSuggestion('Draft response', data?.response?.draftResponse);
+    pushSuggestion('Supervisor recommendation', data?.supervisor?.recommendation);
+    if (Array.isArray(data?.response?.issuesAddressed) && data.response.issuesAddressed.length) {
+      pushSuggestion('Issues addressed', data.response.issuesAddressed.join(' • '));
+    }
+    if (Array.isArray(data?.ragCitations) && data.ragCitations.length) {
+      pushSuggestion('RAG citations', data.ragCitations.map((citation) => citation?.claim || '').filter(Boolean).join(' • '));
+    }
+    return suggestions;
+  }
+
+  function normalizeSourceOfTruth(source) {
+    if (!source || typeof source !== 'object') {
+      return {
+        sourceSystem: 'Snowflake',
+        procedureName: '',
+        procedureCall: '',
+        rowCount: 0,
+        primaryRow: {},
+        rows: [],
+        validationStatus: 'unavailable',
+        validationNotes: [],
+      };
+    }
+
+    return {
+      sourceSystem: source.sourceSystem ?? source.source_system ?? 'Snowflake',
+      procedureName: source.procedureName ?? source.procedure_name ?? '',
+      procedureCall: source.procedureCall ?? source.procedure_call ?? '',
+      rowCount: Number(source.rowCount ?? source.row_count ?? 0),
+      primaryRow: source.primaryRow ?? source.primary_row ?? {},
+      rows: Array.isArray(source.rows) ? source.rows : [],
+      validationStatus: source.validationStatus ?? source.validation_status ?? 'validated',
+      validationNotes: Array.isArray(source.validationNotes ?? source.validation_notes)
+        ? (source.validationNotes ?? source.validation_notes)
+        : [],
+    };
   }
 
   function formatApiError(detail, fallback) {
@@ -605,7 +711,7 @@ Priya`,
                   <span class="mode-tab-icon">🎙</span>
                   <div class="mode-tab-body">
                     <span class="mode-tab-label">Voicemail</span>
-                    <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                    <span class="mode-tab-desc">Record a voicemail and auto-transcribe it with Whisper</span>
                   </div>
                 </button>
               </div>
@@ -656,7 +762,7 @@ Priya`,
                       <span class="vm-mic-icon">🎙</span>
                       <span>Start Recording</span>
                     </button>
-                    <p class="vm-hint">Click to start recording. The audio will be saved to S3 and transcribed via OpenAI Whisper.</p>
+                    <p class="vm-hint">Click to start recording. The audio will be transcribed via OpenAI Whisper after you stop.</p>
                   </div>
                 {/if}
 
@@ -697,12 +803,6 @@ Priya`,
                       {/if}
                       <button class="btn btn-ghost btn-sm" on:click={discardRecording}>Discard</button>
                     </div>
-                    {#if vmS3Key}
-                      <div class="vm-s3-badge">
-                        <span class="vm-s3-icon">☁</span>
-                        <span>Saved to S3 — <code>{vmS3Key}</code></span>
-                      </div>
-                    {/if}
                     {#if vmTranscriptError}
                       <div class="vm-error">⚠ {vmTranscriptError}</div>
                     {/if}
@@ -735,13 +835,7 @@ Priya`,
             <div class="form-section enquiry-ai-section">
               <div class="section-title-row">
                 <div class="section-title">AI Response Suggestions <span class="field-note">review before loading into the table</span></div>
-                <button class="btn-ai-suggest" on:click={analyzeEnquirySuggestions} disabled={enquiryAnalysisLoading || !enquiryRawMessage.trim()}>
-                  {#if enquiryAnalysisLoading}
-                    <span class="spinner-sm"></span> Analysingâ€¦
-                  {:else}
-                    ✦ Generate Suggestions
-                  {/if}
-                </button>
+                
               </div>
 
               {#if enquiryAnalysisError}
@@ -767,6 +861,17 @@ Priya`,
                     <span class="review-val">{(enquiryAnalysisResult.classification?.confidence ?? 0).toFixed(2)}</span>
                   </div>
                 </div>
+
+                {#if enquiryAnalysisResult.classification?.validationQuestions?.length}
+                  <div class="validation-questions-card">
+                    <div class="review-label">Validation questions from procedure</div>
+                    <div class="validation-notes">
+                      {#each enquiryAnalysisResult.classification.validationQuestions as question}
+                        <div class="validation-note">{question}</div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
 
                 <div class="review-complaint">
                   <span class="review-label">Draft subject</span>
@@ -798,6 +903,50 @@ Priya`,
                     {/each}
                   </div>
                 {/if}
+
+                <div class="source-truth-card">
+                  <div class="section-title-row">
+                    <div class="section-title">Source of Truth <span class="field-note">Snowflake procedure output used for validation</span></div>
+                  </div>
+
+                  <div class="review-grid">
+                    <div class="review-item">
+                      <span class="review-label">Source system</span>
+                      <span class="review-val">{enquiryAnalysisResult.sourceOfTruth?.sourceSystem}</span>
+                    </div>
+                    <div class="review-item">
+                      <span class="review-label">Procedure</span>
+                      <span class="review-val mono">{enquiryAnalysisResult.sourceOfTruth?.procedureName}</span>
+                    </div>
+                    <div class="review-item">
+                      <span class="review-label">Rows returned</span>
+                      <span class="review-val">{enquiryAnalysisResult.sourceOfTruth?.rowCount}</span>
+                    </div>
+                    <div class="review-item">
+                      <span class="review-label">Validation status</span>
+                      <span class="review-val">{enquiryAnalysisResult.sourceOfTruth?.validationStatus}</span>
+                    </div>
+                  </div>
+
+                  {#if enquiryAnalysisResult.sourceOfTruth?.validationNotes?.length}
+                    <div class="validation-notes">
+                      {#each enquiryAnalysisResult.sourceOfTruth.validationNotes as note}
+                        <div class="validation-note">{note}</div>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  {#if Object.keys(enquiryAnalysisResult.sourceOfTruth?.primaryRow ?? {}).length}
+                    <div class="source-row-grid">
+                      {#each Object.entries(enquiryAnalysisResult.sourceOfTruth.primaryRow) as [key, value]}
+                        <div class="source-row-item">
+                          <span class="source-row-key">{key}</span>
+                          <span class="source-row-val">{String(value)}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
               {/if}
             </div>
 
@@ -1076,7 +1225,7 @@ Priya`,
                 <span class="mode-tab-icon">🎙</span>
                 <div class="mode-tab-body">
                   <span class="mode-tab-label">Voicemail</span>
-                  <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                    <span class="mode-tab-desc">Record a voicemail and auto-transcribe it with Whisper</span>
                 </div>
               </button>
             </div>
@@ -1377,11 +1526,20 @@ Priya`,
   .review-val   { font-size: 13.5px; color: var(--text-primary); font-weight: 500; }
   .review-val.amt  { color: var(--amber); font-family: var(--font-mono); font-weight: 600; }
   .review-val.loss { color: var(--red);   font-family: var(--font-mono); font-weight: 600; }
+  .review-val.mono { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
   .tier-mini { font-family: var(--font-mono); font-size: 9px; font-weight: 700; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
   .tier-mini.tier-gold   { color: var(--amber); background: var(--amber-glow); }
   .tier-mini.tier-silver { color: #b0b8c8; background: rgba(176,184,200,0.1); }
   .tier-mini.tier-bronze { color: #cd7f32; background: rgba(205,127,50,0.1); }
   .review-complaint p { font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-top: 6px; background: var(--bg-elevated); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); }
+  .validation-questions-card { margin: 10px 0 14px; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid rgba(212,168,67,0.18); background: rgba(212,168,67,0.06); }
+  .source-truth-card { margin-top: 14px; padding: 14px; border-radius: var(--radius-sm); border: 1px solid rgba(91,140,240,0.22); background: linear-gradient(180deg, rgba(12,15,24,0.96), rgba(12,15,24,0.9)); }
+  .validation-notes { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+  .validation-note { padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(91,140,240,0.18); background: rgba(91,140,240,0.08); color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+  .source-row-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+  .source-row-item { padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elevated); display: flex; flex-direction: column; gap: 4px; }
+  .source-row-key { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--font-mono); }
+  .source-row-val { font-size: 12.5px; color: var(--text-primary); word-break: break-word; }
 
   /* Step actions */
   .step-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
@@ -1508,9 +1666,6 @@ Priya`,
   .vm-transcribe-btn { background: var(--amber-glow); border-color: rgba(212,168,67,0.4); color: var(--amber); font-size: 13px; font-weight: 700; }
   .vm-transcribe-btn:hover:not(:disabled) { background: rgba(212,168,67,0.2); }
   .vm-transcribed-badge { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); color: var(--green); font-size: 12.5px; font-weight: 600; }
-  .vm-s3-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--text-muted); }
-  .vm-s3-badge code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); word-break: break-all; }
-  .vm-s3-icon { font-size: 15px; flex-shrink: 0; }
   .vm-error { padding: 8px 12px; background: var(--red-dim); border: 1px solid rgba(224,92,92,0.3); border-radius: var(--radius-sm); color: var(--red); font-size: 12px; }
 
   /* Spinner */

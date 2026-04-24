@@ -118,7 +118,6 @@ async def create_enquiry(payload: EnquiryCreateRequest) -> EnquiryCreateResponse
                 ENQ_EMBEDDING,
                 ENQ_AI_SUMMARY,
                 ENQ_SUGGESTED_RESPONSE,
-                ENQ_VOICEMAIL_S3_KEY,
                 ENQ_VOICEMAIL_DURATION_SEC,
                 ENQ_EMAIL_THREAD_ID
             ) VALUES (
@@ -171,7 +170,6 @@ async def create_enquiry(payload: EnquiryCreateRequest) -> EnquiryCreateResponse
                 float(classification.confidence or 0.0),
                 ai_summary or None,
                 draft_response or None,
-                payload.voicemail_s3_key.strip() or None,
                 float(payload.voicemail_duration_sec or 0.0),
                 payload.email_thread_id.strip() or None,
             ),

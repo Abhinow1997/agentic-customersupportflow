@@ -1,0 +1,29 @@
+```mermaid
+flowchart TD
+  U[User] --> F[Frontend Svelte App]
+
+  F --> B[FastAPI Backend]
+
+  B --> I1[Item Lookup API]
+  B --> I2[Instagram Workflow API]
+  B --> I3[Image Generation API]
+
+  I1 --> D[(Product Data / Snowflake)]
+  I2 --> A[Instagram CrewAI Flow]
+  I3 --> O[OpenAI Image Model]
+
+  A --> C1[Controller Agent]
+  A --> C2[Reviewer Agent]
+  A --> C3[Scraper Agent]
+  A --> C4[Summary Validator]
+  A --> C5[Content Agent]
+  A --> C6[Critique Agent]
+  A --> C7[Formatter Agent]
+
+  C2 --> D
+  C3 --> W[Web Product Page]
+  C5 --> R[Instagram Post Drafts]
+  C7 --> R
+  F --> R
+
+```

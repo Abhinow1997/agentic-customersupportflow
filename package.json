@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:frontend": "node tests/instagram-posts.test.js",
+    "test:backend": "python -m unittest discover -s backend/tests -p \"test_*.py\"",
+    "test": "npm run test:frontend && npm run test:backend"
   },
   "devDependencies": {
     "@sveltejs/adapter-vercel": "^5.0.0",

@@ -72,8 +72,6 @@
   let vmDurationTimer    = null;    // setInterval handle
   let vmTranscribing     = false;   // waiting for Whisper response
   let vmTranscriptError  = '';
-  let vmS3Url            = '';      // S3 URL returned after upload
-  let vmS3Key            = '';
 
   async function startRecording() {
     try {
@@ -83,7 +81,6 @@
       vmAudioUrl    = '';
       vmDuration    = 0;
       vmTranscriptError = '';
-      vmS3Url = ''; vmS3Key = '';
 
       vmMediaRecorder = new MediaRecorder(stream);
       vmMediaRecorder.ondataavailable = e => { if (e.data.size > 0) vmAudioChunks.push(e.data); };
@@ -116,7 +113,6 @@
     vmDuration  = 0;
     vmAudioChunks = [];
     vmTranscriptError = '';
-    vmS3Url = ''; vmS3Key = '';
   }
 
   async function transcribeRecording() {
@@ -131,9 +127,6 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       enquiryRawMessage = data.transcript ?? '';
-      vmS3Url = data.s3_url ?? '';
-      vmS3Key = data.s3_key ?? '';
-      if (data.s3_error) console.warn('S3 warning:', data.s3_error);
     } catch (e) {
       vmTranscriptError = e.message;
     } finally {
@@ -444,7 +437,6 @@ User 7`,
       senderName: enquirySenderName.trim(),
       senderEmail: enquirySenderEmail.trim(),
       senderType: enquirySenderType,
-      voicemailS3Key: vmS3Key,
       voicemailDurationSec: vmDuration,
       emailThreadId: '',
       ticketRef: `enquiry-${Date.now()}`,
@@ -719,7 +711,7 @@ User 7`,
                   <span class="mode-tab-icon">🎙</span>
                   <div class="mode-tab-body">
                     <span class="mode-tab-label">Voicemail</span>
-                    <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                    <span class="mode-tab-desc">Record a voicemail and auto-transcribe it with Whisper</span>
                   </div>
                 </button>
               </div>
@@ -770,7 +762,7 @@ User 7`,
                       <span class="vm-mic-icon">🎙</span>
                       <span>Start Recording</span>
                     </button>
-                    <p class="vm-hint">Click to start recording. The audio will be saved to S3 and transcribed via OpenAI Whisper.</p>
+                    <p class="vm-hint">Click to start recording. The audio will be transcribed via OpenAI Whisper after you stop.</p>
                   </div>
                 {/if}
 
@@ -811,12 +803,6 @@ User 7`,
                       {/if}
                       <button class="btn btn-ghost btn-sm" on:click={discardRecording}>Discard</button>
                     </div>
-                    {#if vmS3Key}
-                      <div class="vm-s3-badge">
-                        <span class="vm-s3-icon">☁</span>
-                        <span>Saved to S3 — <code>{vmS3Key}</code></span>
-                      </div>
-                    {/if}
                     {#if vmTranscriptError}
                       <div class="vm-error">⚠ {vmTranscriptError}</div>
                     {/if}
@@ -1239,7 +1225,7 @@ User 7`,
                 <span class="mode-tab-icon">🎙</span>
                 <div class="mode-tab-body">
                   <span class="mode-tab-label">Voicemail</span>
-                  <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
+                    <span class="mode-tab-desc">Record a voicemail and auto-transcribe it with Whisper</span>
                 </div>
               </button>
             </div>
@@ -1680,9 +1666,6 @@ User 7`,
   .vm-transcribe-btn { background: var(--amber-glow); border-color: rgba(212,168,67,0.4); color: var(--amber); font-size: 13px; font-weight: 700; }
   .vm-transcribe-btn:hover:not(:disabled) { background: rgba(212,168,67,0.2); }
   .vm-transcribed-badge { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); color: var(--green); font-size: 12.5px; font-weight: 600; }
-  .vm-s3-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--text-muted); }
-  .vm-s3-badge code { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-secondary); word-break: break-all; }
-  .vm-s3-icon { font-size: 15px; flex-shrink: 0; }
   .vm-error { padding: 8px 12px; background: var(--red-dim); border: 1px solid rgba(224,92,92,0.3); border-radius: var(--radius-sm); color: var(--red); font-size: 12px; }
 
   /* Spinner */

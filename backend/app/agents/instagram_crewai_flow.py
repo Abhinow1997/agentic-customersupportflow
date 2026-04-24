@@ -24,6 +24,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from crewai import Agent, Crew, Process, Task
 
@@ -530,18 +533,98 @@ def _scrape_walmart_product_data(product_url: str, run_id: str) -> dict[str, Any
 def _load_testing_scraper():
     testing_path = Path(__file__).resolve().parents[2] / "testing.py"
     if not testing_path.exists():
-        raise InstagramFlowError(f"Scraper script not found: {testing_path}")
+        logger.warning("Scraper script not found at %s; using built-in fallback.", testing_path)
+        return _fallback_scrape_walmart_product
 
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("backend_testing", testing_path)
     if spec is None or spec.loader is None:
-        raise InstagramFlowError("Unable to load backend/testing.py scraper module.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+        logger.warning("Unable to load backend/testing.py; using built-in fallback scraper.")
+        return _fallback_scrape_walmart_product
+
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        logger.warning("backend/testing.py could not be imported (%s); using fallback scraper.", exc)
+        return _fallback_scrape_walmart_product
+
     if not hasattr(module, "scrape_walmart_product"):
-        raise InstagramFlowError("backend/testing.py missing scrape_walmart_product(url) function.")
+        logger.warning("backend/testing.py missing scrape_walmart_product(url); using fallback scraper.")
+        return _fallback_scrape_walmart_product
     return getattr(module, "scrape_walmart_product")
+
+
+def _fallback_scrape_walmart_product(product_url: str) -> dict[str, Any]:
+    """
+    Lightweight, dependency-free scraper fallback.
+
+    It attempts a best-effort HTML fetch and extracts a few common metadata
+    fields. If the request fails, it still returns a structured payload so the
+    marketing workflow can continue with the product reference and URL.
+    """
+    parsed = urlparse(product_url)
+    fallback = {
+        "product_url": product_url,
+        "domain": parsed.netloc,
+        "page_title": "",
+        "meta_description": "",
+        "h1": "",
+        "summary": "",
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "notes": [
+            "Fallback scraper used because the dedicated scraper module was unavailable or failed.",
+        ],
+    }
+
+    if not product_url:
+        fallback["notes"].append("No product URL was provided.")
+        return fallback
+
+    try:
+        request = Request(
+            product_url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                )
+            },
+        )
+        with urlopen(request, timeout=10) as response:
+            content_type = response.headers.get("Content-Type", "")
+            html = response.read(200_000).decode("utf-8", errors="replace")
+            fallback["content_type"] = content_type
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        fallback["notes"].append(f"Fetch failed: {exc}")
+        return fallback
+
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.I | re.S)
+    desc_match = re.search(
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
+        html,
+        flags=re.I | re.S,
+    )
+    h1_match = re.search(r"<h1[^>]*>(.*?)</h1>", html, flags=re.I | re.S)
+
+    def _clean(value: str) -> str:
+        value = re.sub(r"<[^>]+>", " ", value)
+        value = re.sub(r"\s+", " ", value)
+        return value.strip()
+
+    page_title = _clean(title_match.group(1)) if title_match else ""
+    meta_description = _clean(desc_match.group(1)) if desc_match else ""
+    h1 = _clean(h1_match.group(1)) if h1_match else ""
+
+    fallback["page_title"] = page_title
+    fallback["meta_description"] = meta_description
+    fallback["h1"] = h1
+    fallback["summary"] = " ".join(part for part in [page_title, h1, meta_description] if part)
+    if not fallback["summary"]:
+        fallback["notes"].append("HTML fetched, but no obvious product metadata was found.")
+    return fallback
 
 
 def _scraper_analysis(

@@ -1,4 +1,4 @@
-# Arcella Support — FastAPI Backend
+# FastAPI Backend
 
 Python FastAPI backend for the Arcella Customer Operations Platform.  
 Runs alongside the SvelteKit frontend and connects to Snowflake.
@@ -23,6 +23,21 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 The `.env` file in this directory is already pre-filled with the Snowflake credentials.
+
+---
+
+## Deployment Links
+
+This backend is designed to run as a separate FastAPI service alongside the SvelteKit frontend.
+
+Replace the placeholders below with the live deployment URLs for your environment:
+
+- Backend API: `https://<your-backend-deployment>`
+- Backend docs: `https://<your-backend-deployment>/docs`
+- Backend health check: `https://<your-backend-deployment>/health`
+- Frontend app: `https://<your-frontend-deployment>.vercel.app`
+
+If the frontend is deployed separately, make sure its `PUBLIC_FASTAPI_URL` points at the live backend instead of `http://localhost:8000`.
 
 ---
 

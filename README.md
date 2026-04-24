@@ -1,4 +1,4 @@
-# agentic-customersupportflow
+# Agentic-Customersupportflow
 
 A SvelteKit + FastAPI support-ops demo for handling customer returns, enquiries, analytics, and AI-assisted marketing workflows.
 
@@ -93,11 +93,38 @@ npm run dev
 
 The app will usually run at `http://localhost:5173`.
 
+## Deployment Links
+
+The frontend is configured for Vercel deployment, and the backend should be deployed separately as a FastAPI service.
+
+Replace the placeholders below with your live URLs:
+
+- Frontend: `https://agentic-customersupportflow.vercel.app`
+- Backend API: `https://agentic-customersupportflow.onrender.com`
+- Backend docs: `https://agentic-customersupportflow.onrender.com/docs`
+- Backend health check: `https://agentic-customersupportflow.onrender.com/health`
+
+If you deploy the backend to a different host, update `PUBLIC_FASTAPI_URL` in your environment so the frontend points to the live API instead of `http://localhost:8000`.
+
 ## Main Workflows
 
 ### Dashboard
 
 Shows summary analytics and overall support health.
+
+### Architecture Flow
+
+The architecture diagram below shows how the frontend, backend, Snowflake, and agent workflows connect across the project:
+
+![Architecture flow diagram](static/images/mermaid-architecture-diagram.svg)
+
+In short:
+
+1. The user interacts with the SvelteKit frontend.
+2. The frontend calls FastAPI routes for tickets, enquiries, analytics, and Instagram generation.
+3. FastAPI reads and writes Snowflake data, and also coordinates agent workflows.
+4. The agent workflows produce drafts, validations, summaries, and streamed outputs back to the UI.
+5. The UI renders the result in the dashboard or showcase pages.
 
 ### Create Ticket
 

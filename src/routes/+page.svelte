@@ -2,8 +2,9 @@
   import { goto } from '$app/navigation';
   import { session } from '$lib/stores.js';
 
-  let email = '';
-  let password = '';
+  // Prefill the demo agent so the login form is ready to use on load.
+  let email = 'joe.doe@walmart.com';
+  let password = 'walmart2025';
   let error = '';
   let loading = false;
 

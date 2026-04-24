@@ -1,6 +1,5 @@
 <script>
   import { goto } from '$app/navigation';
-  import { session } from '$lib/stores.js';
 
   let email = '';
   let password = '';

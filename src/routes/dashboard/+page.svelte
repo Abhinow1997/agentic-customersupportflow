@@ -1,6 +1,5 @@
 <script>
   import { onMount } from 'svelte';
-  import { analyticsDashboard } from '$lib/stores.js';
 
   const FASTAPI = 'http://localhost:8000';
 

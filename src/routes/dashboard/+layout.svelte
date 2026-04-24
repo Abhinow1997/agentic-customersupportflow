@@ -1,7 +1,6 @@
 <script>
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { session } from '$lib/stores.js';
   import { onMount } from 'svelte';
 
   onMount(() => {

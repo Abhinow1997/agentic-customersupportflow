@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId } from '$lib/stores.js';
+  import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId };
 
   const FASTAPI = 'http://localhost:8000';
 

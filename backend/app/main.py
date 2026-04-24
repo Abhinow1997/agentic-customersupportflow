@@ -46,9 +46,8 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description=(
-        "Backend API for the Arcella Customer Operations Platform. "
-        "Serves ticket data from Snowflake and will host the multi-agent "
-        "support pipeline (triage → routing → response → supervisor)."
+        "Backend API for the Walmart Customer Operations Platform. "
+        "Serves ticket data from Snowflake and will host the multi-agent system for analyzing tickets and suggesting resolutions. "
     ),
     docs_url="/docs",
     redoc_url="/redoc",
@@ -58,7 +57,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

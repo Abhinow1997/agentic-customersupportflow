@@ -33,6 +33,7 @@
   let itemLookupLoading = false;
   let itemLookupStatus  = '';        // 'found' | 'not_found' | 'error' | ''
   let itemDetails       = null;      // full item object from FastAPI
+  let itemDetailRows    = [];
   let returnQty         = 1;
 
   // ── Recent Orders (Dynamic) ───────────────────────────────────────────────
@@ -906,6 +907,33 @@
   // ── Helpers ───────────────────────────────────────────────────────────────
   function truncate(str, n) { return str && str.length > n ? str.slice(0, n) + '…' : (str ?? ''); }
   
+  function formatMoney(val) {
+    const num = Number.parseFloat(val);
+    if (!Number.isFinite(num)) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+  }
+
+  function buildItemDetailRows(item) {
+    if (!item) return [];
+    return [
+      { label: 'Item SK', value: `SK ${item.sk ?? '—'}` },
+      { label: 'Item ID', value: item.item_id || '—' },
+      { label: 'Item Name', value: item.name || '—' },
+      { label: 'Brand', value: item.brand || '—' },
+      { label: 'Category', value: item.category || '—' },
+      { label: 'Category Full', value: item.category_full || '—' },
+      { label: 'Class', value: item.cls || '—' },
+      { label: 'Item Number', value: item.item_number || '—' },
+      { label: 'Unit Price', value: formatMoney(item.price) },
+      { label: 'List Price', value: formatMoney(item.list_price) },
+      { label: 'Package Size', value: item.package_size || '—' },
+      { label: 'Product URL', value: item.url || '—', href: item.url || '' },
+      { label: 'Description', value: item.desc || '—', multiline: true, wide: true },
+    ];
+  }
+
+  $: itemDetailRows = buildItemDetailRows(itemDetails);
+
   function formatCurrency(val) {
     if (val == null || isNaN(val)) return '$0.00';
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
@@ -1370,44 +1398,26 @@
             {#if itemDetails}
               <div class="item-card">
                 <div class="item-card-header">
-                  <div class="item-card-title">{itemDetails.name}</div>
+                  <div>
+                    <div class="item-card-title">{itemDetails.name}</div>
+                    <div class="item-card-subtitle">{itemDetails.category_full || itemDetails.category || 'Item details loaded from FastAPI'}</div>
+                  </div>
                   <span class="item-sk-badge">SK {itemDetails.sk}</span>
                 </div>
                 <div class="item-meta-grid">
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Brand</span>
-                    <span class="meta-val">{itemDetails.brand || '—'}</span>
-                  </div>
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Category</span>
-                    <span class="meta-val">{itemDetails.category_full || itemDetails.category}</span>
-                  </div>
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Class</span>
-                    <span class="meta-val">{itemDetails.cls || '—'}</span>
-                  </div>
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Item No.</span>
-                    <span class="meta-val mono">{itemDetails.item_number || '—'}</span>
-                  </div>
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Unit Price</span>
-                    <span class="meta-val price">${parseFloat(itemDetails.price).toFixed(2)}</span>
-                  </div>
-                  <div class="item-meta-cell">
-                    <span class="meta-label">List Price</span>
-                    <span class="meta-val">${parseFloat(itemDetails.list_price).toFixed(2)}</span>
-                  </div>
-                  {#if itemDetails.package_size}
-                  <div class="item-meta-cell">
-                    <span class="meta-label">Package Size</span>
-                    <span class="meta-val">{itemDetails.package_size}</span>
-                  </div>
-                  {/if}
+                  {#each itemDetailRows as row}
+                    <div class="item-meta-cell" class:wide={row.wide}>
+                      <span class="meta-label">{row.label}</span>
+                      {#if row.href}
+                        <a class="meta-val link" href={row.href} target="_blank" rel="noreferrer">{row.value}</a>
+                      {:else if row.multiline}
+                        <div class="meta-val multiline">{row.value}</div>
+                      {:else}
+                        <span class="meta-val {row.label === 'Unit Price' || row.label === 'List Price' ? 'price' : ''}">{row.value}</span>
+                      {/if}
+                    </div>
+                  {/each}
                 </div>
-                {#if itemDetails.desc}
-                  <div class="item-desc">{truncate(itemDetails.desc, 220)}</div>
-                {/if}
                 <div class="qty-row">
                   <label class="qty-label">Return Quantity</label>
                   <div class="qty-controls">
@@ -1415,7 +1425,7 @@
                     <span class="qty-val">{returnQty}</span>
                     <button class="qty-btn" on:click={() => returnQty = Math.min(99, returnQty + 1)}>＋</button>
                   </div>
-                  <span class="qty-total">Total value: <strong>${(parseFloat(itemDetails.price) * returnQty).toFixed(2)}</strong></span>
+                  <span class="qty-total">Total value: <strong>{formatMoney(parseFloat(itemDetails.price) * returnQty)}</strong></span>
                 </div>
               </div>
             {/if}
@@ -1971,14 +1981,18 @@
   .item-card { margin-top: 14px; background: var(--bg-elevated); border: 1px solid rgba(212,168,67,0.2); border-radius: var(--radius-sm); padding: 16px; }
   .item-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
   .item-card-title  { font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+  .item-card-subtitle { margin-top: 2px; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
   .item-sk-badge    { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); background: var(--bg-surface); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
   .item-meta-grid   { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
   .item-meta-cell   { display: flex; flex-direction: column; gap: 2px; }
+  .item-meta-cell.wide { grid-column: 1 / -1; }
   .meta-label       { font-size: 9.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono); }
   .meta-val         { font-size: 13px; color: var(--text-primary); }
   .meta-val.price   { color: var(--amber); font-family: var(--font-mono); font-weight: 600; }
   .meta-val.mono    { font-family: var(--font-mono); }
-  .item-desc        { font-size: 12px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; margin-bottom: 12px; }
+  .meta-val.link    { color: var(--blue); text-decoration: none; word-break: break-word; }
+  .meta-val.link:hover { text-decoration: underline; }
+  .meta-val.multiline { white-space: pre-wrap; line-height: 1.6; color: var(--text-secondary); }
   .qty-row     { display: flex; align-items: center; gap: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
   .qty-label   { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .qty-controls { display: flex; align-items: center; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }

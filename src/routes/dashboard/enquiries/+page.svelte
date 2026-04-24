@@ -31,6 +31,7 @@
   let itemLookupLoading = false;
   let itemLookupStatus  = '';        // 'found' | 'not_found' | 'error' | ''
   let itemDetails       = null;      // full item object from FastAPI
+  let itemDetailRows    = [];
   let returnQty         = 1;
 
   // ── Package assessment ────────────────────────────────────────────────────
@@ -61,6 +62,12 @@
   let enquiryAnalysisLoading = false;
   let enquiryAnalysisError = '';
   let enquiryAnalysisResult = null;
+  let enquirySaving = false;
+  let enquirySaveError = '';
+  let enquirySaveSuccess = false;
+  let enquirySavedTicketNumber = '';
+  let enquirySavedTicketId = '';
+  let enquiryCurrentTicketRef = '';
 
   // ── Voicemail recording state ────────────────────────────────────────────
   let vmRecording        = false;   // currently recording
@@ -393,6 +400,8 @@ User 7`,
   async function analyzeEnquirySuggestions() {
     enquiryAnalysisLoading = true;
     enquiryAnalysisError = '';
+    enquirySaveError = '';
+    enquirySaveSuccess = false;
     try {
       const enquiryPayload = buildEnquiryAnalysisPayload();
       let response = await fetch(`${FASTAPI_URL}/api/enquiry/analyze`, {
@@ -415,7 +424,9 @@ User 7`,
       }
 
       if (!response.ok) throw new Error(formatApiError(data, `HTTP ${response.status}`));
-      enquiryAnalysisResult = normalizeEnquiryAnalysisResult(data, enquiryPayload);
+      const normalizedResult = normalizeEnquiryAnalysisResult(data, enquiryPayload);
+      enquiryAnalysisResult = normalizedResult;
+      await saveAnalyzedEnquiry(enquiryPayload, normalizedResult);
     } catch (err) {
       enquiryAnalysisError = err.message;
     } finally {
@@ -424,6 +435,7 @@ User 7`,
   }
 
   function buildEnquiryAnalysisPayload() {
+    enquiryCurrentTicketRef = enquiryCurrentTicketRef || `enquiry-${Date.now()}`;
     return {
       customer: {
         name: custName.trim() || enquirySenderName.trim() || 'Customer',
@@ -439,8 +451,49 @@ User 7`,
       senderType: enquirySenderType,
       voicemailDurationSec: vmDuration,
       emailThreadId: '',
-      ticketRef: `enquiry-${Date.now()}`,
+      ticketRef: enquiryCurrentTicketRef,
     };
+  }
+
+  async function saveAnalyzedEnquiry(enquiryPayload, analysisResult) {
+    if (!analysisResult?.classification) return;
+    if (enquirySaving) return;
+
+    enquirySaving = true;
+    enquirySaveError = '';
+    try {
+      const createPayload = {
+        customer: enquiryPayload.customer,
+        channel: enquiryPayload.channel,
+        subject: enquiryPayload.subject,
+        body: enquiryPayload.body,
+        classification: analysisResult.classification,
+        draftSubject: analysisResult.draftSubject ?? analysisResult.draft_subject ?? enquiryPayload.subject,
+        draftResponse: analysisResult.draftResponse ?? analysisResult.draft_response ?? enquiryPayload.body,
+        aiSummary: analysisResult.aiSummary ?? analysisResult.ai_summary ?? '',
+        suggestions: Array.isArray(analysisResult.suggestions) ? analysisResult.suggestions : [],
+        voicemailDurationSec: enquiryPayload.voicemailDurationSec ?? 0,
+        emailThreadId: enquiryPayload.emailThreadId ?? '',
+        assignedTo: '',
+        status: 'Open',
+      };
+
+      const res = await fetch(`${FASTAPI_URL}/api/enquiry/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createPayload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(formatApiError(data, `HTTP ${res.status}`));
+
+      enquirySaveSuccess = true;
+      enquirySavedTicketId = data.ticketId ?? '';
+      enquirySavedTicketNumber = data.ticketNumber ?? '';
+    } catch (err) {
+      enquirySaveError = err.message;
+    } finally {
+      enquirySaving = false;
+    }
   }
 
   function buildLegacyAnalyzePayload(enquiryPayload) {
@@ -595,6 +648,8 @@ User 7`,
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     enquiryAnalysisLoading = false; enquiryAnalysisError = ''; enquiryAnalysisResult = null;
+    enquirySaving = false; enquirySaveError = ''; enquirySaveSuccess = false;
+    enquirySavedTicketNumber = ''; enquirySavedTicketId = ''; enquiryCurrentTicketRef = '';
     returnAmt = ''; netLoss = '';
   }
 
@@ -644,6 +699,32 @@ User 7`,
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function truncate(str, n) { return str && str.length > n ? str.slice(0, n) + '…' : (str ?? ''); }
+  function formatMoney(val) {
+    const num = Number.parseFloat(val);
+    if (!Number.isFinite(num)) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+  }
+
+  function buildItemDetailRows(item) {
+    if (!item) return [];
+    return [
+      { label: 'Item SK', value: `SK ${item.sk ?? '—'}` },
+      { label: 'Item ID', value: item.item_id || '—' },
+      { label: 'Item Name', value: item.name || '—' },
+      { label: 'Brand', value: item.brand || '—' },
+      { label: 'Category', value: item.category || '—' },
+      { label: 'Category Full', value: item.category_full || '—' },
+      { label: 'Class', value: item.cls || '—' },
+      { label: 'Item Number', value: item.item_number || '—' },
+      { label: 'Unit Price', value: formatMoney(item.price) },
+      { label: 'List Price', value: formatMoney(item.list_price) },
+      { label: 'Package Size', value: item.package_size || '—' },
+      { label: 'Product URL', value: item.url || '—', href: item.url || '' },
+      { label: 'Description', value: item.desc || '—', multiline: true, wide: true },
+    ];
+  }
+
+  $: itemDetailRows = buildItemDetailRows(itemDetails);
 </script>
 
 <div class="create-page">
@@ -840,6 +921,34 @@ User 7`,
 
               {#if enquiryAnalysisError}
                 <div class="error-banner">⚠ {enquiryAnalysisError}</div>
+              {/if}
+
+              {#if enquirySaving}
+                <div class="save-banner save-loading">
+                  <span class="spinner-sm"></span>
+                  <div class="save-banner-body">
+                    <strong>Saving enquiry ticket</strong>
+                    <span>Writing the analyzed enquiry into ENQUIRY_TICKETS…</span>
+                  </div>
+                </div>
+              {:else if enquirySaveSuccess}
+                <div class="save-banner save-success">
+                  <span class="banner-icon">✓</span>
+                  <div class="save-banner-body">
+                    <strong>Enquiry saved to Snowflake</strong>
+                    <span>
+                      Ticket {enquirySavedTicketNumber || enquirySavedTicketId || 'created'} is now stored in ENQUIRY_TICKETS.
+                    </span>
+                  </div>
+                </div>
+              {:else if enquirySaveError}
+                <div class="save-banner save-error">
+                  <span class="banner-icon">⚠</span>
+                  <div class="save-banner-body">
+                    <strong>Could not save enquiry</strong>
+                    <span>{enquirySaveError}</span>
+                  </div>
+                </div>
               {/if}
 
               {#if enquiryAnalysisResult}
@@ -1099,6 +1208,20 @@ User 7`,
                 {#if itemDetails.desc}
                   <div class="item-desc">{truncate(itemDetails.desc, 220)}</div>
                 {/if}
+                <div class="item-detail-grid">
+                  {#each itemDetailRows as row}
+                    <div class="item-detail-cell" class:wide={row.wide}>
+                      <span class="detail-label">{row.label}</span>
+                      {#if row.href}
+                        <a class="detail-val link" href={row.href} target="_blank" rel="noreferrer">{row.value}</a>
+                      {:else if row.multiline}
+                        <div class="detail-val multiline">{row.value}</div>
+                      {:else}
+                        <span class="detail-val">{row.value}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
                 <!-- Quantity -->
                 <div class="qty-row">
                   <label class="qty-label">Return Quantity</label>
@@ -1419,6 +1542,14 @@ User 7`,
   .meta-val.price   { color: var(--amber); font-family: var(--font-mono); font-weight: 600; }
   .meta-val.mono    { font-family: var(--font-mono); }
   .item-desc        { font-size: 12px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border); padding-top: 10px; margin-bottom: 12px; }
+  .item-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .item-detail-cell { display: flex; flex-direction: column; gap: 2px; }
+  .item-detail-cell.wide { grid-column: 1 / -1; }
+  .detail-label { font-size: 9.5px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--font-mono); }
+  .detail-val { font-size: 13px; color: var(--text-primary); }
+  .detail-val.link { color: var(--blue); text-decoration: none; word-break: break-word; }
+  .detail-val.link:hover { text-decoration: underline; }
+  .detail-val.multiline { white-space: pre-wrap; line-height: 1.6; color: var(--text-secondary); }
   .qty-row     { display: flex; align-items: center; gap: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
   .qty-label   { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
   .qty-controls { display: flex; align-items: center; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
@@ -1563,6 +1694,44 @@ User 7`,
 
   /* Error */
   .error-banner { padding: 10px 14px; background: var(--red-dim); border: 1px solid rgba(224,92,92,0.3); border-radius: var(--radius-sm); color: var(--red); font-size: 12px; }
+
+  .save-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    margin: 10px 0 14px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .save-banner-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .save-banner-body strong {
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .save-banner-body span {
+    color: var(--text-secondary);
+  }
+  .save-loading {
+    border: 1px solid rgba(91,140,240,0.24);
+    background: rgba(91,140,240,0.08);
+    color: var(--blue);
+  }
+  .save-success {
+    border: 1px solid rgba(76,175,130,0.24);
+    background: rgba(76,175,130,0.08);
+    color: var(--green);
+  }
+  .save-error {
+    border: 1px solid rgba(224,92,92,0.3);
+    background: var(--red-dim);
+    color: var(--red);
+  }
 
   /* Priority tags */
   .priority-tag { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; }

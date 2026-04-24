@@ -735,13 +735,7 @@ Priya`,
             <div class="form-section enquiry-ai-section">
               <div class="section-title-row">
                 <div class="section-title">AI Response Suggestions <span class="field-note">review before loading into the table</span></div>
-                <button class="btn-ai-suggest" on:click={analyzeEnquirySuggestions} disabled={enquiryAnalysisLoading || !enquiryRawMessage.trim()}>
-                  {#if enquiryAnalysisLoading}
-                    <span class="spinner-sm"></span> Analysingâ€¦
-                  {:else}
-                    ✦ Generate Suggestions
-                  {/if}
-                </button>
+                
               </div>
 
               {#if enquiryAnalysisError}

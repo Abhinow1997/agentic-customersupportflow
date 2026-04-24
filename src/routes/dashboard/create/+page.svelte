@@ -1,6 +1,5 @@
 <script>
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
   import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId } from '$lib/stores.js';
 
   const FASTAPI = 'http://localhost:8000';
@@ -8,8 +7,9 @@
   // ── Ticket type ──────────────────────────────────────────────────────────
   let ticketType = 'return';
   let returnSearch = '';
-  let returnTab = 'Open';
+  let returnDateFilter = 'all'; // 'all' | '7' | '30'
   let workspaceView = 'create'; // 'queue' | 'create'
+  let selectedTicket = null; // Store full ticket object for detail view
 
   // ── Step / submit state ──────────────────────────────────────────────────
   let step = 1;
@@ -44,28 +44,105 @@
   let dateFilter = 'all'; // 'all' | '7'
 
   onMount(() => {
-    loadTickets();
+    if ($tickets.length === 0) {
+      loadTickets();
+    }
     fetchRecentOrders(false);
   });
 
+  function setWorkspaceView(view) {
+    workspaceView = view;
+    if (view === 'queue') {
+      returnDateFilter = 'all';
+      returnSearch = '';
+      selectedTicket = null;
+      if ($tickets.length === 0) {
+        loadTickets();
+      }
+    }
+  }
+
+  const normalizeStatus = (value) => (value ?? 'Open').toString().trim().toLowerCase();
+  const statusLabel = (value) => {
+    const normalized = normalizeStatus(value);
+    if (normalized === 'open') return 'Open';
+    if (normalized === 'closed') return 'Closed';
+    if (!normalized) return 'Open';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
   $: returnTicketsQueued = $tickets.length > 0;
+  
   $: filteredReturnTickets = $tickets.filter(t => {
-    if (returnTab !== 'All' && t.status !== returnTab) return false;
+    // Date filter
+    if (returnDateFilter !== 'all') {
+      const days = parseInt(returnDateFilter);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      
+      const dateStr = t.created;
+      if (dateStr) {
+        let ticketDate;
+        // Handle YYYYMMDD format
+        if (/^\d{8}$/.test(String(dateStr).trim())) {
+          const s = String(dateStr).trim();
+          ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+        } else {
+          ticketDate = new Date(dateStr);
+        }
+        if (!isNaN(ticketDate.getTime()) && ticketDate < cutoff) {
+          return false;
+        }
+      }
+    }
+    
+    // Search filter
     if (returnSearch.trim()) {
       const q = returnSearch.trim().toLowerCase();
+      const amt = String(t.returnAmt ?? '').toLowerCase();
+      const loss = String(t.netLoss ?? '').toLowerCase();
+      const reason = (t.returnReason ?? t.resolution ?? '').toLowerCase();
       if (
         !t.id?.toLowerCase().includes(q) &&
-        !t.customer?.name?.toLowerCase().includes(q) &&
-        !t.item?.name?.toLowerCase().includes(q) &&
-        !t.item?.category?.toLowerCase().includes(q)
+        !String(t.status ?? '').toLowerCase().includes(q) &&
+        !reason.includes(q) &&
+        !amt.includes(q) &&
+        !loss.includes(q)
       ) return false;
     }
     return true;
   });
-  $: returnCounts = {
-    Open: $tickets.filter(t => t.status === 'Open').length,
-    Closed: $tickets.filter(t => t.status === 'Closed').length,
-    All: $tickets.length
+  
+  $: dateFilterCounts = {
+    'all': $tickets.length,
+    '7': $tickets.filter(t => {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      const dateStr = t.created;
+      if (!dateStr) return false;
+      let ticketDate;
+      if (/^\d{8}$/.test(String(dateStr).trim())) {
+        const s = String(dateStr).trim();
+        ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+      } else {
+        ticketDate = new Date(dateStr);
+      }
+      return !isNaN(ticketDate.getTime()) && ticketDate >= cutoff;
+    }).length,
+    '30': $tickets.filter(t => {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const dateStr = t.created;
+      if (!dateStr) return false;
+      let ticketDate;
+      if (/^\d{8}$/.test(String(dateStr).trim())) {
+        const s = String(dateStr).trim();
+        ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+      } else {
+        ticketDate = new Date(dateStr);
+      }
+      return !isNaN(ticketDate.getTime()) && ticketDate >= cutoff;
+    }).length,
   };
 
   async function fetchRecentOrders(forceRefresh = false) {
@@ -148,8 +225,9 @@
     // Removed auto-navigation to step 2 so the agent can review before proceeding manually
   }
 
-  function selectReturnTicket(id) {
-    selectedTicketId.set(id);
+  function selectReturnTicket(ticket) {
+    selectedTicket = ticket;
+    selectedTicketId.set(ticket.id);
   }
 
   function setReturnSearch(event) {
@@ -646,7 +724,15 @@
     finally { submitting = false; }
   }
 
-  function goToQueue()    { goto('/dashboard'); }
+  function goToQueue()    {
+    submitSuccess = false;
+    workspaceView = 'queue';
+    returnTab = 'All';
+    returnSearch = '';
+    if ($tickets.length === 0) {
+      loadTickets();
+    }
+  }
   function createAnother() {
     step = 1; submitSuccess = false; createdTicketId = '';
     lookupEmail = ''; lookupStatus = ''; custName = ''; custEmail = '';
@@ -662,8 +748,23 @@
   // ── Helpers ───────────────────────────────────────────────────────────────
   function truncate(str, n) { return str && str.length > n ? str.slice(0, n) + '…' : (str ?? ''); }
   
+  function formatCurrency(val) {
+    if (val == null || isNaN(val)) return '$0.00';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+  }
+  
   function formatDateStr(dStr) {
     if (!dStr) return '—';
+    const raw = String(dStr).trim();
+    if (/^\d{8}$/.test(raw)) {
+      const yyyy = raw.slice(0, 4);
+      const mm = raw.slice(4, 6);
+      const dd = raw.slice(6, 8);
+      const parsed = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+    }
     const d = new Date(dStr);
     if (isNaN(d.getTime())) return dStr;
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -693,26 +794,14 @@
           <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
         </p>
         <div class="success-actions">
-          <button class="btn btn-primary" on:click={goToQueue}>View in Queue</button>
-          <button class="btn btn-secondary" on:click={createAnother}>Create Another</button>
+        <button type="button" class="btn btn-primary" on:click={goToQueue}>View Returned Items</button>
+        <button type="button" class="btn btn-secondary" on:click={createAnother}>Create Another</button>
         </div>
       </div>
     {/if}
 
       <div class="view-switcher">
-        <button class="view-card" class:active={workspaceView === 'queue'} on:click={() => workspaceView = 'queue'}>
-          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
-            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
-          </svg>
-          <div class="view-card-body">
-            <div class="view-card-label">
-              Ticket Queue
-              <span class="view-card-count">{$tickets.length}</span>
-            </div>
-            <div class="view-card-desc">Review and manage existing return tickets</div>
-          </div>
-        </button>
-        <button class="view-card" class:active={workspaceView === 'create'} on:click={() => workspaceView = 'create'}>
+        <button type="button" class="view-card" class:active={workspaceView === 'create'} on:click={() => setWorkspaceView('create')}>
           <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
             <path d="M12 4v16m8-8H4"/>
           </svg>
@@ -721,62 +810,174 @@
             <div class="view-card-desc">Process a new customer return request</div>
           </div>
         </button>
+        <button type="button" class="view-card" class:active={workspaceView === 'queue'} on:click={() => setWorkspaceView('queue')}>
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+          </svg>
+          <div class="view-card-body">
+            <div class="view-card-label">
+              Returned Items
+              <span class="view-card-count">{$tickets.length}</span>
+            </div>
+            <div class="view-card-desc">Review and manage existing return tickets</div>
+          </div>
+        </button>
       </div>
 
       {#if workspaceView === 'queue'}
         <div class="workspace-panel return-panel">
           <div class="section-title-row">
-            <div class="section-title" style="margin: 0;">Return Tickets <span class="section-sub">queue and review</span></div>
-            <button class="btn btn-ghost btn-sm" on:click={loadTickets} disabled={$ticketsLoading}>
+              <div class="section-title" style="margin: 0;">Returned Items Listing <span class="section-sub">queue and review</span></div>
+            <button type="button" class="btn btn-ghost btn-sm" on:click={() => loadTickets(true)} disabled={$ticketsLoading}>
               {#if $ticketsLoading}<span class="spinner-sm"></span>{:else}↻ Refresh{/if}
             </button>
           </div>
 
-          <div class="lookup-row" style="margin-top: 12px;">
-            <div class="lookup-input-wrap">
-              <input
-                type="text"
-                value={returnSearch}
-                on:input={setReturnSearch}
-                placeholder="Search ticket, customer, item, or category…"
-              />
-            </div>
-          </div>
-
-          <div class="chip-group" style="margin-top: 10px;">
-            {#each ['Open', 'Closed', 'All'] as tab}
-              <button class="chip" class:selected={returnTab === tab} on:click={() => returnTab = tab}>
-                {tab}
-                <span class="chip-count">{returnCounts[tab]}</span>
-              </button>
-            {/each}
-          </div>
-
-          {#if $ticketsError}
-            <div class="error-banner" style="margin-top: 12px;">⚠ {$ticketsError}</div>
-          {/if}
-
-          {#if !returnTicketsQueued}
-            <div class="empty-state" style="margin-top: 14px;">Load tickets from Snowflake to view the return queue.</div>
-          {:else if filteredReturnTickets.length > 0}
-            <div class="return-ticket-list">
-              {#each filteredReturnTickets as t (t.id)}
-                <button class="return-ticket-card" on:click={() => selectReturnTicket(t.id)}>
-                  <div class="rtc-top">
-                    <span class="rtc-id">{t.id}</span>
-                    <span class="rtc-status rtc-status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
-                    <span class="rtc-date">{formatDateStr(t.created)}</span>
-                  </div>
-                  <div class="rtc-title">{truncate(t.item?.name ?? t.id, 54)}</div>
-                  <div class="rtc-meta">
-                    <span>{t.customer?.name ?? '—'}</span>
-                    <span>{t.item?.category ?? '—'}</span>
-                  </div>
-                </button>
-              {/each}
+          {#if $ticketsLoading && $tickets.length === 0}
+            <div class="loading-state" style="margin-top: 20px; text-align: center; padding: 40px;">
+              <span class="spinner-sm"></span>
+              <div style="margin-top: 12px; color: var(--text-muted);">Loading tickets...</div>
             </div>
           {:else}
-            <div class="empty-state" style="margin-top: 14px;">No return tickets match the current filter.</div>
+            <div class="queue-summary">
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Total</span>
+                <span class="queue-summary-value">{$tickets.length}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Showing</span>
+                <span class="queue-summary-value">{filteredReturnTickets.length}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Last 7 Days</span>
+                <span class="queue-summary-value">{dateFilterCounts['7']}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Last 30 Days</span>
+                <span class="queue-summary-value">{dateFilterCounts['30']}</span>
+              </div>
+            </div>
+
+            <div class="lookup-row" style="margin-top: 12px;">
+              <div class="lookup-input-wrap">
+                <input
+                  type="text"
+                  value={returnSearch}
+                  on:input={setReturnSearch}
+                  placeholder="Search ticket, status, reason, or amount…"
+                />
+              </div>
+            </div>
+
+            <div class="chip-group" style="margin-top: 10px;">
+              <button type="button" class="chip" class:selected={returnDateFilter === 'all'} on:click={() => returnDateFilter = 'all'}>
+                All Dates
+                <span class="chip-count">{dateFilterCounts['all']}</span>
+              </button>
+              <button type="button" class="chip" class:selected={returnDateFilter === '7'} on:click={() => returnDateFilter = '7'}>
+                Last 7 Days
+                <span class="chip-count">{dateFilterCounts['7']}</span>
+              </button>
+              <button type="button" class="chip" class:selected={returnDateFilter === '30'} on:click={() => returnDateFilter = '30'}>
+                Last 30 Days
+                <span class="chip-count">{dateFilterCounts['30']}</span>
+              </button>
+            </div>
+
+            {#if $ticketsError}
+              <div class="error-banner" style="margin-top: 12px;">⚠ {$ticketsError}</div>
+            {/if}
+
+            {#if !returnTicketsQueued}
+              <div class="empty-state" style="margin-top: 14px;">No tickets loaded. Click Refresh to load tickets from Snowflake.</div>
+            {:else if filteredReturnTickets.length > 0}
+              <div class="queue-content-grid">
+                <div class="return-ticket-list">
+                  {#each filteredReturnTickets as t (t.id)}
+                    <button type="button" class="return-ticket-card" class:selected={selectedTicket?.id === t.id} on:click={() => selectReturnTicket(t)}>
+                      <div class="rtc-top">
+                        <span class="rtc-id">{t.id}</span>
+                        <span class="rtc-status rtc-status-{normalizeStatus(t.status)}">{statusLabel(t.status)}</span>
+                        <span class="rtc-date">{formatDateStr(t.created)}</span>
+                      </div>
+                      <div class="rtc-title">{truncate(t.returnReason ?? t.resolution ?? t.subject ?? t.id, 54)}</div>
+                      <div class="rtc-meta">
+                        <span>Amt {formatCurrency(t.returnAmt ?? 0)}</span>
+                        <span>Loss {formatCurrency(t.netLoss ?? 0)}</span>
+                        <span>Qty {t.item?.returnQty ?? 1}</span>
+                      </div>
+                    </button>
+                  {/each}
+                </div>
+
+                {#if selectedTicket}
+                  <div class="ticket-detail-panel">
+                    <div class="ticket-detail-header">
+                      <h3>Ticket Details</h3>
+                      <button type="button" class="btn btn-ghost btn-sm" on:click={() => selectedTicket = null}>✕ Close</button>
+                    </div>
+                    
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Ticket ID</div>
+                      <div class="detail-value">{selectedTicket.id}</div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Status</div>
+                      <div class="detail-value">
+                        <span class="rtc-status rtc-status-{normalizeStatus(selectedTicket.status)}">{statusLabel(selectedTicket.status)}</span>
+                      </div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Created Date</div>
+                      <div class="detail-value">{formatDateStr(selectedTicket.created)}</div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Return Reason</div>
+                      <div class="detail-value">{selectedTicket.returnReason ?? selectedTicket.resolution ?? selectedTicket.subject ?? '—'}</div>
+                    </div>
+
+                    <div class="ticket-detail-grid">
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Return Amount</div>
+                        <div class="detail-value detail-value-amount">{formatCurrency(selectedTicket.returnAmt ?? 0)}</div>
+                      </div>
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Net Loss</div>
+                        <div class="detail-value detail-value-loss">{formatCurrency(selectedTicket.netLoss ?? 0)}</div>
+                      </div>
+                    </div>
+
+                    <div class="ticket-detail-grid">
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Quantity</div>
+                        <div class="detail-value">{selectedTicket.item?.returnQty ?? 1}</div>
+                      </div>
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Customer SK</div>
+                        <div class="detail-value">{selectedTicket.customer?.sk ?? '—'}</div>
+                      </div>
+                    </div>
+
+                    {#if selectedTicket.item}
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Item Details</div>
+                        <div class="detail-value">
+                          <div>{selectedTicket.item.name ?? '—'}</div>
+                          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                            SK: {selectedTicket.item.sk ?? '—'}
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div class="empty-state" style="margin-top: 14px;">No return records match the current filter.</div>
+            {/if}
           {/if}
         </div>
       {:else}
@@ -1407,18 +1608,36 @@
   .workspace-grid { display: grid; grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); gap: 24px; margin-bottom: 18px; align-items: start; }
   .workspace-panel { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); padding: 20px; }
   .workflow-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-  .return-ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
+  .return-ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .return-ticket-card { text-align: left; padding: 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 6px; }
   .return-ticket-card:hover { border-color: rgba(212,168,67,0.4); background: var(--amber-glow); transform: translateY(-1px); }
+  .return-ticket-card.selected { border-color: var(--amber); background: var(--amber-glow); }
+  
+  .queue-content-grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 14px; }
+  .queue-content-grid:has(.ticket-detail-panel) { grid-template-columns: 1fr 400px; }
+  
+  .ticket-detail-panel { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; display: flex; flex-direction: column; gap: 16px; max-height: 600px; overflow-y: auto; }
+  .ticket-detail-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .ticket-detail-header h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0; }
+  .ticket-detail-section { display: flex; flex-direction: column; gap: 6px; }
+  .ticket-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .detail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-family: var(--font-mono); font-weight: 600; }
+  .detail-value { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
+  .detail-value-amount { font-size: 18px; font-weight: 700; color: var(--green); font-family: var(--font-mono); }
+  .detail-value-loss { font-size: 18px; font-weight: 700; color: var(--red); font-family: var(--font-mono); }
   .rtc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .rtc-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-right: auto; }
   .rtc-status { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
   .rtc-status-open { color: var(--blue); background: var(--blue-dim); }
   .rtc-status-closed { color: var(--green); background: var(--green-dim); }
   .rtc-date { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
-  .rtc-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-  .rtc-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
-  .chip-count { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); }
+  .rtc-title { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.35; }
+  .rtc-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+  .chip-count { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,0.55); border: 1px solid var(--border); color: var(--text-muted); }
+  .queue-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .queue-summary-item { padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-surface); display: flex; flex-direction: column; gap: 4px; }
+  .queue-summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-family: var(--font-mono); }
+  .queue-summary-value { font-size: 18px; font-weight: 700; color: var(--text-primary); }
 
   /* Sections */
   .form-container { display: flex; flex-direction: column; gap: 16px; }

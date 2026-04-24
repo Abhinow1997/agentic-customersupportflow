@@ -4,9 +4,12 @@
   // ── Form state ────────────────────────────────────────────────────────────
   let retrievalSetting = 'yes';
   let critiqueRounds = 2;
-  let productIdentifierMode = 'item_sk';
   let productItemSk = '';
   let productName = '';
+  let itemLookupSk = '';
+  let itemLookupLoading = false;
+  let itemLookupStatus = '';
+  let itemDetails = null;
   let methodSectionContent = '';
   let campaignCaption = '';
 
@@ -25,6 +28,182 @@
   let imageGenError = '';
   let imageModel = 'gpt-image-2';
   let imageSize = '512x512';
+  const SAMPLE_FEEDS = [
+    {
+      sk: 26399,
+      brand: 'Raid',
+      category: 'Shop by Brand',
+      name: 'Raid Max Bed Bug Crack and Crevice Foaming Spray, 17.5 oz',
+      theme: 'Home defense, fast relief, and confidence under pressure.',
+      headline: 'When the problem is hidden, the solution has to go deeper.',
+      caption: 'A fast-action, confidence-first post built around deep reach, precision coverage, and peace of mind for urgent home protection.',
+      methodSectionContent: 'Create a home-defense campaign that feels urgent, trustworthy, and highly practical. Focus on quick relief, hidden problem solving, and the confidence homeowners feel when they have a product that reaches into cracks and crevices.',
+      campaignCaption: 'Fast relief for hidden bed bug problems. Deep reach, precise coverage, and peace of mind for urgent home protection.',
+      imageSrc: '/images/raid-sample.jpg',
+      showImage: true,
+      hashtags: ['#Raid', '#HomeProtection', '#PestControl', '#CleanHome'],
+    },
+    {
+      sk: 4187,
+      brand: 'Nature Valley',
+      category: 'Food',
+      name: 'Nature Valley Soft Baked Bar Peanut Butter',
+      theme: 'Cozy snacking, everyday convenience, and wholesome energy.',
+      headline: 'Soft-baked comfort for the snack moments in between.',
+      caption: 'A warm pantry-style feed card that emphasizes texture, convenience, and everyday snack appeal with a wholesome tone.',
+      methodSectionContent: 'Create a cozy snack campaign that feels warm, approachable, and easy to enjoy on the go. Highlight soft-baked texture, peanut butter flavor, and the sense of everyday convenience for busy people and families.',
+      campaignCaption: 'Soft-baked comfort for snack moments in between. Wholesome, convenient, and ready for everyday energy.',
+      imageSrc: '/images/nature-valley-sample.jpg',
+      showImage: true,
+      hashtags: ['#NatureValley', '#SnackTime', '#OnTheGo', '#Food'],
+    },
+    {
+      sk: 11904,
+      brand: 'Daim',
+      category: 'Food',
+      name: 'Daim Chocolate Tie Top Bag',
+      theme: 'Premium treat, giftable indulgence, and rich dessert appeal.',
+      headline: 'A small chocolate treat with a premium shelf presence.',
+      caption: 'A polished, giftable visual direction with rich chocolate tones, crisp typography, and a premium retail feel.',
+      methodSectionContent: 'Create a premium indulgence campaign that feels giftable, refined, and satisfying. Emphasize rich chocolate texture, elevated presentation, and the idea of a small treat that still feels special.',
+      campaignCaption: 'A premium little treat with rich chocolate appeal, giftable style, and dessert-worthy indulgence.',
+      imageSrc: '/images/daim-sample.jpg',
+      showImage: true,
+      hashtags: ['#Daim', '#Chocolate', '#SweetTreat', '#Dessert'],
+    },
+    {
+      sk: 16237,
+      brand: 'TRUSTMEDICAL',
+      category: 'Health',
+      name: 'Sharps Retrieval Containers, 1.25 gal',
+      theme: 'Safety-first health management with clinical clarity.',
+      headline: 'Clean handling, trusted disposal, and peace of mind.',
+      caption: 'A precise, professional-looking healthcare visual built around safe storage, responsibility, and confidence in handling sharps.',
+      methodSectionContent: 'Create a healthcare safety campaign that feels clinical, calm, and dependable. Focus on secure disposal, responsible handling, and the reassurance of a clean, organized system for medical waste management.',
+      campaignCaption: 'Safe handling, trusted disposal, and peace of mind for everyday healthcare management.',
+      hashtags: ['#HealthSafety', '#MedicalSupplies', '#TrustMedical', '#SafeDisposal'],
+    },
+    {
+      sk: 2887,
+      brand: 'JT Paintball',
+      category: 'Sports & Outdoors',
+      name: 'JT Chest Protector for Paintball',
+      theme: 'Action-ready protection with sporty energy.',
+      headline: 'Gear up for the game with confidence.',
+      caption: 'An energetic outdoor sports post with bold motion, protective gear details, and a competitive, adrenaline-driven feel.',
+      methodSectionContent: 'Create an action-sports campaign that feels energetic, protective, and competition-ready. Highlight mobility, confidence, and the excitement of gearing up for paintball with serious protection.',
+      campaignCaption: 'Gear up for the game with confidence. Protective, bold, and built for action.',
+      hashtags: ['#Paintball', '#SportsGear', '#JTPaintball', '#ProtectiveGear'],
+    },
+    {
+      sk: 16782,
+      brand: 'Desert Essence',
+      category: 'Personal Care',
+      name: 'Desert Essence Organics Hand & Body Lotion',
+      theme: 'Natural self-care with calm, clean beauty.',
+      headline: 'A daily ritual that feels soft and restorative.',
+      caption: 'A spa-like wellness visual with organic textures, gentle skin-care cues, and a natural self-care mood.',
+      methodSectionContent: 'Create a self-care campaign that feels calm, natural, and restorative. Emphasize soft texture, organic ingredients, and a soothing routine that fits into everyday wellness.',
+      campaignCaption: 'A gentle daily ritual for soft, restored skin and calm natural beauty.',
+      hashtags: ['#SelfCare', '#OrganicBeauty', '#BodyLotion', '#Wellness'],
+    },
+    {
+      sk: 13902,
+      brand: 'Charms',
+      category: 'Food',
+      name: '2 Pack - Charms Blow Pops Assorted 100ct',
+      theme: 'Playful nostalgia and colorful candy fun.',
+      headline: 'Sweet, bold, and made for sharing moments.',
+      caption: 'A vibrant candy-forward post with bright color, playful layout, and nostalgic energy that feels fun and energetic.',
+      methodSectionContent: 'Create a playful candy campaign that feels nostalgic, bright, and fun to share. Focus on colorful variety, sweet moments, and the joyful energy of a classic treat.',
+      campaignCaption: 'Sweet, bold, and made for sharing moments. A colorful classic with nostalgic fun.',
+      hashtags: ['#Candy', '#Charms', '#BlowPops', '#SweetTreats'],
+    },
+    {
+      sk: 11536,
+      brand: 'Curious Minds',
+      category: 'Toys',
+      name: '3D Geometric Shapes - Play Doh & Sand Molds',
+      theme: 'Creative play, learning, and hands-on discovery.',
+      headline: 'Build, shape, and imagine something new.',
+      caption: 'A bright educational play visual that highlights learning through tactile, colorful, and imaginative play.',
+      methodSectionContent: 'Create a kids learning campaign that feels imaginative, hands-on, and educational. Highlight tactile play, shape-building, and the creativity that comes from discovery through making.',
+      campaignCaption: 'Build, shape, and imagine something new. Hands-on learning with colorful creative play.',
+      hashtags: ['#KidsPlay', '#CreativeLearning', '#Toys', '#Imagination'],
+    },
+    {
+      sk: 13229,
+      brand: 'RAYOVAC',
+      category: 'Household Essentials',
+      name: 'ALKLN BATT AA 30PK',
+      theme: 'Reliable everyday power for home essentials.',
+      headline: 'Power up the devices you use every day.',
+      caption: 'A clean utility-style product visual that focuses on reliability, convenience, and everyday household value.',
+      methodSectionContent: 'Create a utility-focused household campaign that feels dependable, practical, and clear. Emphasize everyday power, convenience, and the value of having reliable batteries ready at home.',
+      campaignCaption: 'Reliable everyday power for the devices you use every day.',
+      hashtags: ['#HouseholdEssentials', '#Batteries', '#Rayovac', '#EverydayPower'],
+    },
+    {
+      sk: 34030,
+      brand: 'Crosman Archery',
+      category: 'Sports & Outdoors',
+      name: 'CenterPoint Sentinel Long Bow Set',
+      theme: 'Precision, performance, and outdoor adventure.',
+      headline: 'Built for focus, form, and the next shot.',
+      caption: 'A bold outdoor gear visual with sleek lines, wood-and-metal textures, and a performance-forward feel.',
+      methodSectionContent: 'Create an outdoor performance campaign that feels focused, precise, and adventure-ready. Highlight craftsmanship, control, and the confidence that comes from quality gear built for the next shot.',
+      campaignCaption: 'Precision, performance, and outdoor adventure for the next shot.',
+      hashtags: ['#Archery', '#OutdoorGear', '#SportsAndOutdoors', '#CenterPoint'],
+    },
+    {
+      sk: 5977,
+      brand: 'Wd-40',
+      category: 'Household Essentials',
+      name: '2PK 1.25 OZ 2000 Flushes Toilet Bowl Cleaner',
+      theme: 'Clean, reliable maintenance for everyday home care.',
+      headline: 'Freshness that works hard behind the scenes.',
+      caption: 'A practical household-maintenance post with clean surfaces, bright visuals, and a dependable everyday tone.',
+      methodSectionContent: 'Create a home-care campaign that feels practical, clean, and reliable. Focus on freshness, maintenance, and the everyday value of products that quietly keep the home running smoothly.',
+      campaignCaption: 'Freshness that works hard behind the scenes for dependable home care.',
+      hashtags: ['#HomeCare', '#Cleaning', '#HouseholdEssentials', '#FreshHome'],
+    },
+    {
+      sk: 4581,
+      brand: 'Food Club',
+      category: 'Food',
+      name: 'Canned Fruit',
+      theme: 'Simple pantry staples and versatile everyday meals.',
+      headline: 'A pantry classic made easy to reach for any recipe.',
+      caption: 'A bright, approachable food post that feels practical, versatile, and family-friendly with grocery shelf appeal.',
+      methodSectionContent: 'Create a pantry staples campaign that feels easy, versatile, and family-friendly. Highlight convenience, everyday use, and how simple ingredients can support a variety of meals and recipes.',
+      campaignCaption: 'A pantry classic made easy for everyday meals and recipes.',
+      hashtags: ['#PantryStaples', '#FoodClub', '#KitchenBasics', '#Fruit'],
+    },
+    {
+      sk: 13964,
+      brand: 'LITTLE TREES',
+      category: 'Auto & Tires',
+      name: 'Little Trees Vent Liquid Air Freshener',
+      theme: 'Fresh car comfort and a clean driving experience.',
+      headline: 'Small detail, big difference on every drive.',
+      caption: 'A sleek automotive lifestyle visual with fresh scent cues, clean surfaces, and compact retail-friendly composition.',
+      methodSectionContent: 'Create an automotive freshness campaign that feels clean, simple, and convenient. Focus on the small but meaningful detail that improves the driving experience and keeps the car feeling fresh.',
+      campaignCaption: 'Small detail, big difference on every drive. Fresh car comfort made easy.',
+      hashtags: ['#AutoCare', '#AirFreshener', '#LittleTrees', '#FreshRide'],
+    },
+    {
+      sk: 28076,
+      brand: 'Sorelle Furniture',
+      category: 'Baby',
+      name: 'Sorelle Berkley Round Top 4-in-1 Crib',
+      theme: 'Nursery elegance, safety, and growing with the family.',
+      headline: 'A nursery centerpiece designed to last through every stage.',
+      caption: 'A calm, premium baby-room visual that emphasizes craftsmanship, security, and a beautiful home setting.',
+      methodSectionContent: 'Create a nursery campaign that feels elegant, safe, and long-lasting. Highlight craftsmanship, comfort, and the reassurance of a beautiful centerpiece designed to grow with the family.',
+      campaignCaption: 'A nursery centerpiece designed to last through every stage of family life.',
+      hashtags: ['#BabyNursery', '#SorelleFurniture', '#CribDesign', '#FamilyHome'],
+    },
+  ];
 
   // Pre-fill prompt when flow result arrives
   $: if (finalResult?.visualizerPrompt && !customVisualPrompt) {
@@ -58,7 +237,6 @@
 
   // ── Form helpers ──────────────────────────────────────────────────────────
   function setRetrieval(v) { retrievalSetting = v; }
-  function setIdentifierMode(m) { productIdentifierMode = m; }
   function decRounds() { critiqueRounds = Math.max(0, critiqueRounds - 1); }
   function incRounds() { critiqueRounds = Math.min(5, critiqueRounds + 1); }
   function toggleStage(stage) {
@@ -67,6 +245,107 @@
   function formatJson(value) {
     try { return JSON.stringify(value, null, 2); }
     catch { return String(value ?? ''); }
+  }
+
+  function formatApiError(err, fallback = 'Request failed') {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err;
+    if (Array.isArray(err)) {
+      return err.map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item !== 'object') return String(item);
+        const parts = [];
+        if (item.loc) parts.push(Array.isArray(item.loc) ? item.loc.join('.') : String(item.loc));
+        if (item.msg) parts.push(item.msg);
+        if (item.type) parts.push(`(${item.type})`);
+        return parts.length ? parts.join(': ') : JSON.stringify(item);
+      }).join(' | ');
+    }
+    if (typeof err === 'object') {
+      if (typeof err.detail === 'string') return err.detail;
+      if (Array.isArray(err.detail)) return formatApiError(err.detail, fallback);
+      if (err.detail && typeof err.detail === 'object') return formatApiError(err.detail, fallback);
+      if (err.message) return err.message;
+      try { return JSON.stringify(err); } catch { return fallback; }
+    }
+    return String(err);
+  }
+
+  function formatMoney(val) {
+    const num = Number.parseFloat(val);
+    if (!Number.isFinite(num)) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+  }
+
+  function buildItemDetailRows(item) {
+    if (!item) return [];
+    return [
+      { label: 'Item SK', value: `SK ${item.sk ?? '—'}` },
+      { label: 'Item ID', value: item.item_id || '—' },
+      { label: 'Item Name', value: item.name || '—' },
+      { label: 'Brand', value: item.brand || '—' },
+      { label: 'Category', value: item.category || '—' },
+      { label: 'Category Full', value: item.category_full || '—' },
+      { label: 'Class', value: item.cls || '—' },
+      { label: 'Item Number', value: item.item_number || '—' },
+      { label: 'Unit Price', value: formatMoney(item.price) },
+      { label: 'List Price', value: formatMoney(item.list_price) },
+      { label: 'Package Size', value: item.package_size || '—' },
+      { label: 'Product URL', value: item.url || '—', href: item.url || '' },
+      { label: 'Description', value: item.desc || '—', multiline: true, wide: true },
+    ];
+  }
+
+  $: itemDetailRows = buildItemDetailRows(itemDetails);
+
+  function clearItemLookup() {
+    itemLookupSk = '';
+    itemLookupLoading = false;
+    itemLookupStatus = '';
+    itemDetails = null;
+  }
+
+  async function lookupItem() {
+    const skRaw = String(itemLookupSk ?? '').trim();
+    if (!skRaw) return;
+
+    const parsedSk = Number.parseInt(skRaw, 10);
+    if (Number.isNaN(parsedSk) || parsedSk <= 0) {
+      itemLookupStatus = 'Product Item SK must be a valid positive number.';
+      itemDetails = null;
+      return;
+    }
+
+    itemLookupLoading = true;
+    itemLookupStatus = '';
+    itemDetails = null;
+
+    try {
+      const res = await fetch(`${FASTAPI_URL}/api/items?sk=${encodeURIComponent(String(parsedSk))}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(formatApiError(data.detail, `HTTP ${res.status}`));
+
+      if (!data.found || !data.item) {
+        itemLookupStatus = 'Item not found for that SK.';
+        return;
+      }
+
+      itemDetails = data.item;
+      productItemSk = String(data.item.sk ?? parsedSk);
+      productName = data.item.name ?? '';
+      itemLookupStatus = 'Item loaded into the workflow fields.';
+    } catch (e) {
+      itemLookupStatus = e.message ?? 'Item lookup failed.';
+    } finally {
+      itemLookupLoading = false;
+    }
+  }
+
+  function useSampleFeed(sample) {
+    itemLookupSk = String(sample.sk);
+    methodSectionContent = sample.methodSectionContent ?? sample.caption ?? sample.theme ?? '';
+    campaignCaption = sample.campaignCaption ?? sample.headline ?? sample.caption ?? '';
+    lookupItem();
   }
 
   // ── Stream event handler ──────────────────────────────────────────────────
@@ -101,12 +380,16 @@
 
     const itemSkRaw = String(productItemSk ?? '').trim();
     const productNameRaw = String(productName ?? '').trim();
-    if (!itemSkRaw && !productNameRaw) {
-      streamError = 'Please provide either Product Item SK or Product Name.';
+    if (!itemSkRaw) {
+      streamError = 'Please look up an item first.';
       return;
     }
-    if (!methodSectionContent.trim() || !campaignCaption.trim()) {
-      streamError = 'Please fill Method Section Content and Campaign Caption before running.';
+    if (methodSectionContent.trim().length < 10) {
+      streamError = 'Method Section Content must be at least 10 characters.';
+      return;
+    }
+    if (campaignCaption.trim().length < 5) {
+      streamError = 'Campaign Caption Seed must be at least 5 characters.';
       return;
     }
     const parsedSk = itemSkRaw ? Number.parseInt(itemSkRaw, 10) : null;
@@ -132,7 +415,7 @@
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail ?? `HTTP ${res.status}`);
+        throw new Error(formatApiError(data.detail, `HTTP ${res.status}`));
       }
       if (!res.body) throw new Error('No stream body from server.');
 
@@ -240,15 +523,59 @@
       </div>
 
       <div class="field-group">
-        <label>Product Identifier</label>
-        <div class="toggle-row">
-          <button class="tog" class:sel={productIdentifierMode === 'item_sk'} on:click={() => setIdentifierMode('item_sk')}>Item SK</button>
-          <button class="tog" class:sel={productIdentifierMode === 'name'}    on:click={() => setIdentifierMode('name')}>Name</button>
+        <label>Item Lookup</label>
+        <div class="lookup-row">
+          <input
+            class="text-input lookup-input"
+            type="number"
+            min="1"
+            step="1"
+            bind:value={itemLookupSk}
+            placeholder="Look up by Item SK, e.g. 813"
+            on:keydown={(e) => e.key === 'Enter' && lookupItem()}
+            disabled={itemLookupLoading}
+          />
+          <button class="btn lookup-btn" on:click={lookupItem} disabled={itemLookupLoading || !String(itemLookupSk).trim()}>
+            {#if itemLookupLoading}
+              <span class="spinner-sm"></span> Loading...
+            {:else}
+              Lookup
+            {/if}
+          </button>
+          {#if itemLookupStatus}
+            <button class="btn btn-clear" on:click={clearItemLookup}>Clear</button>
+          {/if}
         </div>
-        {#if productIdentifierMode === 'item_sk'}
-          <input class="text-input" type="number" min="1" step="1" bind:value={productItemSk} placeholder="e.g. 813" />
-        {:else}
-          <input class="text-input" type="text" bind:value={productName} placeholder="e.g. Wireless Earbuds Pro" />
+
+        {#if itemLookupStatus}
+          <div class="lookup-status">{itemLookupStatus}</div>
+        {/if}
+
+        {#if itemDetails}
+          <div class="item-card">
+            <div class="item-card-header">
+              <div>
+                <div class="item-card-title">{itemDetails.name}</div>
+                <div class="item-card-subtitle">{itemDetails.category_full || itemDetails.category || 'Loaded from /api/items'}</div>
+              </div>
+              <span class="item-sk-badge">SK {itemDetails.sk}</span>
+            </div>
+
+            <div class="item-meta-grid">
+              {#each itemDetailRows as row}
+                <div class="item-meta-cell" class:wide={row.wide}>
+                  <span class="meta-label">{row.label}</span>
+                  {#if row.href}
+                    <a class="meta-val link" href={row.href} target="_blank" rel="noreferrer">{row.value}</a>
+                  {:else if row.multiline}
+                    <div class="meta-val multiline">{row.value}</div>
+                  {:else}
+                    <span class="meta-val {row.label === 'Unit Price' || row.label === 'List Price' ? 'price' : ''}">{row.value}</span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
         {/if}
       </div>
 
@@ -288,6 +615,44 @@
           <div class="empty-icon">🎯</div>
           <div class="empty-title">Ready to generate</div>
           <div class="empty-sub">Configure your campaign and click Run to start the crewAI pipeline. Agent outputs will stream in live.</div>
+          <div class="sample-feeds">
+            <div class="section-label sample-heading">
+              <span class="section-icon">🧪</span>
+              Sample Feed Concepts
+              <span class="post-count">3 examples</span>
+            </div>
+            <div class="sample-feed-grid">
+              {#each SAMPLE_FEEDS as sample}
+                <button type="button" class="sample-feed-card" on:click={() => useSampleFeed(sample)}>
+                  <div class="sample-visual">
+                    <div class="sample-visual-top">
+                      <span class="sample-brand">{sample.brand}</span>
+                      <span class="sample-sku">SK {sample.sk}</span>
+                    </div>
+                    {#if sample.showImage && sample.imageSrc}
+                      <div class="sample-image-block">
+                        <img class="sample-image" src={sample.imageSrc} alt={sample.name} loading="lazy" />
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="sample-body">
+                    <div class="sample-feed-category">{sample.category}</div>
+                    <h4 class="sample-feed-title">{sample.name}</h4>
+                    <div class="sample-feed-theme">{sample.theme}</div>
+                    <p class="sample-feed-headline">{sample.headline}</p>
+                    <p class="sample-feed-caption">{sample.caption}</p>
+                    <div class="sample-feed-meta">
+                      <div class="sample-feed-tags">
+                        {#each sample.hashtags as tag}
+                          <span class="tag-pill">{tag}</span>
+                        {/each}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              {/each}
+            </div>
+          </div>
         </div>
 
       {:else}
@@ -604,6 +969,55 @@
   .text-input:focus,.text-area:focus { border-color:var(--amber-dim); box-shadow:0 0 0 3px var(--amber-glow); }
   .text-input::placeholder,.text-area::placeholder { color:var(--text-muted); }
   .text-area { resize:vertical; min-height:100px; line-height:1.55; }
+  .lookup-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .lookup-input { flex:1; min-width:0; }
+  .lookup-btn {
+    padding:10px 14px; border:1px solid rgba(91,140,240,0.35); border-radius:var(--radius-sm);
+    background:rgba(91,140,240,0.1); color:var(--blue); font-size:13px; font-weight:700;
+    cursor:pointer; transition:all 0.13s;
+  }
+  .lookup-btn:hover:not(:disabled) { background:rgba(91,140,240,0.18); }
+  .lookup-btn:disabled { opacity:0.5; cursor:not-allowed; }
+  .btn-clear {
+    padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-sm);
+    background:var(--bg-elevated); color:var(--text-muted); font-size:12px; font-weight:600;
+    cursor:pointer;
+  }
+  .btn-clear:hover { color:var(--text-primary); border-color:rgba(212,168,67,0.3); }
+  .lookup-status { margin-top:8px; font-size:12px; color:var(--text-muted); line-height:1.5; }
+  .item-card {
+    margin-top:12px; padding:16px; border-radius:var(--radius-md);
+    border:1px solid rgba(212,168,67,0.2); background:var(--bg-surface);
+  }
+  .item-card-header { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:12px; }
+  .item-card-title { font-size:15px; font-weight:700; color:var(--text-primary); line-height:1.35; }
+  .item-card-subtitle { margin-top:2px; font-size:11px; color:var(--text-muted); line-height:1.4; }
+  .item-sk-badge {
+    font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
+    background:var(--bg-elevated); border:1px solid var(--border); border-radius:999px;
+    padding:2px 8px; white-space:nowrap;
+  }
+  .item-meta-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+  .item-meta-cell { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .item-meta-cell.wide { grid-column:1 / -1; }
+  .meta-label {
+    font-size:9.5px; font-weight:600; color:var(--text-muted); text-transform:uppercase;
+    letter-spacing:0.08em; font-family:var(--font-mono);
+  }
+  .meta-val {
+    font-size:13px;
+    color:var(--text-primary);
+    line-height:1.45;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+  .meta-val.price { color:var(--amber); font-family:var(--font-mono); font-weight:600; }
+  .meta-val.link { color:var(--blue); text-decoration:none; word-break:break-word; }
+  .meta-val.link:hover { text-decoration:underline; }
+  .meta-val.multiline { white-space:pre-wrap; line-height:1.6; color:var(--text-secondary); }
+  @media (max-width: 900px) {
+    .item-meta-grid { grid-template-columns: 1fr; }
+  }
   .actions { margin-top:16px; }
   .run-btn { width:100%; padding:11px 14px; border:1px solid rgba(212,168,67,0.45); border-radius:var(--radius-sm); background:var(--amber-glow); color:var(--amber); font-size:13px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; display:flex; justify-content:center; align-items:center; gap:7px; cursor:pointer; transition:all 0.13s; }
   .run-btn:hover:not(:disabled) { background:rgba(212,168,67,0.2); }
@@ -617,6 +1031,38 @@
   .empty-icon  { font-size:36px; }
   .empty-title { font-size:15px; color:var(--text-primary); font-weight:600; }
   .empty-sub   { font-size:12px; color:var(--text-muted); max-width:320px; line-height:1.6; }
+  .sample-feeds { width:100%; margin-top:18px; text-align:left; }
+  .sample-heading { margin-bottom:14px; }
+  .sample-feed-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; width:100%; }
+  .sample-feed-card {
+    display:flex; flex-direction:column; gap:12px; padding:14px;
+    background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius-md);
+    text-align:left; width:100%; cursor:pointer; color:inherit; font:inherit;
+  }
+  .sample-feed-card:hover { border-color:rgba(212,168,67,0.32); }
+  .sample-feed-card:focus-visible { outline:2px solid rgba(91,140,240,0.65); outline-offset:2px; }
+  .sample-visual { display:flex; flex-direction:column; gap:10px; }
+  .sample-visual-top { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .sample-brand { font-size:11px; font-family:var(--font-mono); font-weight:700; letter-spacing:0.08em; text-transform:uppercase; color:var(--amber); }
+  .sample-sku { font-size:10px; font-family:var(--font-mono); color:var(--text-muted); background:var(--bg-surface); border:1px solid var(--border); border-radius:999px; padding:2px 8px; white-space:nowrap; }
+  .sample-image-block { width:100%; }
+  .sample-image {
+    width:100%;
+    display:block;
+    border-radius:var(--radius-md);
+    border:1px solid rgba(91,140,240,0.28);
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    background: linear-gradient(180deg, rgba(15,18,28,0.92), rgba(8,10,16,0.96));
+  }
+  .sample-body { display:flex; flex-direction:column; gap:8px; }
+  .sample-feed-category { font-size:10px; font-family:var(--font-mono); text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); }
+  .sample-feed-title { margin:0; font-size:14px; line-height:1.4; color:var(--text-primary); }
+  .sample-feed-theme { font-size:11.5px; line-height:1.5; color:var(--amber); font-weight:600; }
+  .sample-feed-headline { margin:0; font-size:12px; line-height:1.55; color:var(--text-secondary); }
+  .sample-feed-caption { margin:0; font-size:11.5px; line-height:1.55; color:var(--text-muted); }
+  .sample-feed-meta { display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid var(--border); }
+  .sample-feed-tags { display:flex; flex-wrap:wrap; gap:5px; }
 
   /* shared section label row */
   .section-label { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; color:var(--text-primary); letter-spacing:0.03em; margin-bottom:12px; }

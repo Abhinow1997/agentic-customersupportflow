@@ -2,20 +2,32 @@
 import { writable, derived } from 'svelte/store'; // derived still used for selectedTicket
 import { MOCK_TICKETS } from './data.js';
 
-// Auth store — persisted to sessionStorage so HMR reloads and refreshes don't wipe the login
-function makePersistedSession() {
-  let initial = null;
+function makePersistedJSONStore(storageKey, initialValue) {
+  let initial = initialValue;
   if (typeof sessionStorage !== 'undefined') {
-    try { initial = JSON.parse(sessionStorage.getItem('arcella_session')); } catch {}
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw !== null) initial = JSON.parse(raw);
+    } catch {}
   }
+
   const store = writable(initial);
   store.subscribe(val => {
     if (typeof sessionStorage !== 'undefined') {
-      if (val) sessionStorage.setItem('arcella_session', JSON.stringify(val));
-      else     sessionStorage.removeItem('arcella_session');
+      if (val === null || val === undefined) {
+        sessionStorage.removeItem(storageKey);
+      } else {
+        sessionStorage.setItem(storageKey, JSON.stringify(val));
+      }
     }
   });
+
   return store;
+}
+
+// Auth store — persisted to sessionStorage so HMR reloads and refreshes don't wipe the login
+function makePersistedSession() {
+  return makePersistedJSONStore('arcella_session', null);
 }
 export const session = makePersistedSession();
 
@@ -63,6 +75,8 @@ export const selectedTicket = derived(
 
 // Filters
 export const filters = writable({ status: 'all', priority: 'all', search: '' });
+
+export const analyticsDashboard = makePersistedJSONStore('arcella_analytics_dashboard_v2', null);
 
 export async function analyzeTicket(ticket) {
   const payload = {

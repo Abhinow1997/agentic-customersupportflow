@@ -1,11 +1,15 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId } from '$lib/stores.js';
 
   const FASTAPI = 'http://localhost:8000';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
   let ticketType = 'return';
+  let returnSearch = '';
+  let returnTab = 'Open';
+  let workspaceView = 'create'; // 'queue' | 'create'
 
   // ── Step / submit state ──────────────────────────────────────────────────
   let step = 1;
@@ -40,8 +44,29 @@
   let dateFilter = 'all'; // 'all' | '7'
 
   onMount(() => {
+    loadTickets();
     fetchRecentOrders(false);
   });
+
+  $: returnTicketsQueued = $tickets.length > 0;
+  $: filteredReturnTickets = $tickets.filter(t => {
+    if (returnTab !== 'All' && t.status !== returnTab) return false;
+    if (returnSearch.trim()) {
+      const q = returnSearch.trim().toLowerCase();
+      if (
+        !t.id?.toLowerCase().includes(q) &&
+        !t.customer?.name?.toLowerCase().includes(q) &&
+        !t.item?.name?.toLowerCase().includes(q) &&
+        !t.item?.category?.toLowerCase().includes(q)
+      ) return false;
+    }
+    return true;
+  });
+  $: returnCounts = {
+    Open: $tickets.filter(t => t.status === 'Open').length,
+    Closed: $tickets.filter(t => t.status === 'Closed').length,
+    All: $tickets.length
+  };
 
   async function fetchRecentOrders(forceRefresh = false) {
     if (!forceRefresh) {
@@ -121,6 +146,14 @@
     }
     
     // Removed auto-navigation to step 2 so the agent can review before proceeding manually
+  }
+
+  function selectReturnTicket(id) {
+    selectedTicketId.set(id);
+  }
+
+  function setReturnSearch(event) {
+    returnSearch = event.target.value;
   }
 
   // ── Package assessment ────────────────────────────────────────────────────
@@ -640,11 +673,11 @@
 <div class="create-page">
   <header class="topbar">
     <div class="topbar-left">
-      <h2>Create Ticket</h2>
-      <div class="breadcrumb">New Ticket · Manual Entry · Item Return</div>
+      <h2>Item Return</h2>
+      <div class="breadcrumb">Return Workspace · Ticket Queue · Item Library</div>
     </div>
     <div class="topbar-right">
-      <a href="/dashboard" class="back-link">← Back to Queue</a>
+      <a href="/dashboard" class="back-link">← Back to Dashboard</a>
     </div>
   </header>
 
@@ -664,28 +697,99 @@
           <button class="btn btn-secondary" on:click={createAnother}>Create Another</button>
         </div>
       </div>
+    {/if}
 
-    {:else}
-
-      <div class="type-selector">
-        <button class="type-btn" class:active={ticketType === 'return'} on:click={() => setTicketType('return')}>
-          <span class="type-icon">↩</span>
-          <span class="type-label">Item Return</span>
-          <span class="type-desc">Customer returning a purchased item</span>
+      <div class="view-switcher">
+        <button class="view-card" class:active={workspaceView === 'queue'} on:click={() => workspaceView = 'queue'}>
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+          </svg>
+          <div class="view-card-body">
+            <div class="view-card-label">
+              Ticket Queue
+              <span class="view-card-count">{$tickets.length}</span>
+            </div>
+            <div class="view-card-desc">Review and manage existing return tickets</div>
+          </div>
+        </button>
+        <button class="view-card" class:active={workspaceView === 'create'} on:click={() => workspaceView = 'create'}>
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
+            <path d="M12 4v16m8-8H4"/>
+          </svg>
+          <div class="view-card-body">
+            <div class="view-card-label">Create Ticket</div>
+            <div class="view-card-desc">Process a new customer return request</div>
+          </div>
         </button>
       </div>
 
-      <div class="step-bar">
-        {#each stepLabels as s}
-          <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
-            on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; }}>
-            <span class="step-num">{step > s.n ? '✓' : s.n}</span>
-            <span class="step-label">{s.label}</span>
-          </button>
-        {/each}
-      </div>
+      {#if workspaceView === 'queue'}
+        <div class="workspace-panel return-panel">
+          <div class="section-title-row">
+            <div class="section-title" style="margin: 0;">Return Tickets <span class="section-sub">queue and review</span></div>
+            <button class="btn btn-ghost btn-sm" on:click={loadTickets} disabled={$ticketsLoading}>
+              {#if $ticketsLoading}<span class="spinner-sm"></span>{:else}↻ Refresh{/if}
+            </button>
+          </div>
 
-      <div class="form-container">
+          <div class="lookup-row" style="margin-top: 12px;">
+            <div class="lookup-input-wrap">
+              <input
+                type="text"
+                value={returnSearch}
+                on:input={setReturnSearch}
+                placeholder="Search ticket, customer, item, or category…"
+              />
+            </div>
+          </div>
+
+          <div class="chip-group" style="margin-top: 10px;">
+            {#each ['Open', 'Closed', 'All'] as tab}
+              <button class="chip" class:selected={returnTab === tab} on:click={() => returnTab = tab}>
+                {tab}
+                <span class="chip-count">{returnCounts[tab]}</span>
+              </button>
+            {/each}
+          </div>
+
+          {#if $ticketsError}
+            <div class="error-banner" style="margin-top: 12px;">⚠ {$ticketsError}</div>
+          {/if}
+
+          {#if !returnTicketsQueued}
+            <div class="empty-state" style="margin-top: 14px;">Load tickets from Snowflake to view the return queue.</div>
+          {:else if filteredReturnTickets.length > 0}
+            <div class="return-ticket-list">
+              {#each filteredReturnTickets as t (t.id)}
+                <button class="return-ticket-card" on:click={() => selectReturnTicket(t.id)}>
+                  <div class="rtc-top">
+                    <span class="rtc-id">{t.id}</span>
+                    <span class="rtc-status rtc-status-{(t.status ?? 'Open').toLowerCase()}">{t.status ?? 'Open'}</span>
+                    <span class="rtc-date">{formatDateStr(t.created)}</span>
+                  </div>
+                  <div class="rtc-title">{truncate(t.item?.name ?? t.id, 54)}</div>
+                  <div class="rtc-meta">
+                    <span>{t.customer?.name ?? '—'}</span>
+                    <span>{t.item?.category ?? '—'}</span>
+                  </div>
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <div class="empty-state" style="margin-top: 14px;">No return tickets match the current filter.</div>
+          {/if}
+        </div>
+      {:else}
+        <div class="workspace-panel workflow-panel">
+          <div class="step-bar">
+            {#each stepLabels as s}
+              <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
+                on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; }}>
+                <span class="step-num">{step > s.n ? '✓' : s.n}</span>
+                <span class="step-label">{s.label}</span>
+              </button>
+            {/each}
+          </div>
 
         {#if step === 1}
             <!-- RETURN PATH -->
@@ -740,10 +844,10 @@
               <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>Next: Item & Assessment →</button>
             </div>
 
-            <!-- Recent Orders Integration -->
+            <!-- Item listing -->
             <div class="form-section">
               <div class="section-title-row">
-                <div class="section-title" style="margin: 0;">Recent Orders <span class="section-sub">— click to auto-fill ticket details</span></div>
+                <div class="section-title" style="margin: 0;">Items <span class="section-sub">— click to auto-fill ticket details</span></div>
                 
                 <div class="recent-orders-controls">
                   <div class="chip-group">
@@ -1241,21 +1345,19 @@
               </div>
             {/if}
           
-          </div>
-          <div class="step-actions">
-            <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            {#if !decisionLogged}
-              <div class="step-hint">Complete the assessment and make a decision to proceed</div>
-            {/if}
-          </div>
+           <div class="step-actions">
+             <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
+             {#if !decisionLogged}
+               <div class="step-hint">Complete the assessment and make a decision to proceed</div>
+             {/if}
+           </div>
 
-
+          </div>
         {/if}
-
       </div>
     {/if}
   </div>
-</div>
+  </div>
 
 <style>
   .create-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -1266,10 +1368,10 @@
   .back-link { font-size: 13px; color: var(--text-muted); font-family: var(--font-mono); transition: color 0.15s; }
   .back-link:hover { color: var(--amber); }
 
-  .page-body { flex: 1; overflow-y: auto; padding: 28px 32px; max-width: 900px; margin: 0 auto; width: 100%; }
+  .page-body { flex: 1; overflow-y: auto; padding: 36px 24px; max-width: none; width: 100%; }
 
   /* Type selector */
-  .type-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .type-selector { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-bottom: 24px; max-width: 600px; }
   .type-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 16px 18px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; text-align: left; }
   .type-btn:hover { border-color: rgba(212,168,67,0.3); }
   .type-btn.active { border-color: rgba(212,168,67,0.5); background: var(--amber-glow); }
@@ -1278,8 +1380,22 @@
   .type-btn.active .type-label { color: var(--amber); }
   .type-desc { font-size: 11.5px; color: var(--text-muted); }
 
+  /* View switcher */
+  .view-switcher { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .view-card { display: flex; align-items: center; gap: 14px; padding: 18px 20px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; text-align: left; }
+  .view-card:hover:not(.active) { border-color: rgba(212,168,67,0.3); }
+  .view-card.active { border-color: rgba(212,168,67,0.5); background: var(--amber-glow); }
+  .view-card-icon { flex-shrink: 0; color: var(--text-muted); }
+  .view-card.active .view-card-icon { color: var(--amber); }
+  .view-card-body { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .view-card-label { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .view-card.active .view-card-label { color: var(--amber); }
+  .view-card-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+  .view-card-count { font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); }
+  .view-card.active .view-card-count { background: rgba(212,168,67,0.2); border-color: rgba(212,168,67,0.4); color: var(--amber); }
+
   /* Step bar */
-  .step-bar { display: flex; gap: 8px; margin-bottom: 20px; }
+  .step-bar { display: flex; gap: 10px; margin-bottom: 24px; }
   .step-pill { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 24px; color: var(--text-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s; flex: 1; justify-content: center; }
   .step-pill.active { background: var(--amber-glow); border-color: rgba(212,168,67,0.4); color: var(--amber); }
   .step-pill.done  { background: var(--green-dim); border-color: rgba(76,175,130,0.3); color: var(--green); }
@@ -1288,9 +1404,25 @@
   .step-pill.done  .step-num  { background: var(--green); color: #0c0e14; border-color: var(--green); }
   .step-label { white-space: nowrap; }
 
+  .workspace-grid { display: grid; grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); gap: 24px; margin-bottom: 18px; align-items: start; }
+  .workspace-panel { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); padding: 20px; }
+  .workflow-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .return-ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
+  .return-ticket-card { text-align: left; padding: 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 6px; }
+  .return-ticket-card:hover { border-color: rgba(212,168,67,0.4); background: var(--amber-glow); transform: translateY(-1px); }
+  .rtc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rtc-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-right: auto; }
+  .rtc-status { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
+  .rtc-status-open { color: var(--blue); background: var(--blue-dim); }
+  .rtc-status-closed { color: var(--green); background: var(--green-dim); }
+  .rtc-date { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+  .rtc-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .rtc-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
+  .chip-count { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); }
+
   /* Sections */
   .form-container { display: flex; flex-direction: column; gap: 16px; }
-  .form-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; }
+  .form-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 24px; }
   .form-section.section-locked { opacity: 0.5; pointer-events: none; }
   .form-section.section-hidden { display: none; }
   .form-section.section-visible { display: block; }
@@ -1438,6 +1570,13 @@
   .coverage-pill { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
   .coverage-pill.ok { color: var(--green); background: var(--green-dim); border-color: rgba(76,175,130,0.35); }
   .coverage-pill.warn { color: var(--amber); background: var(--amber-glow); border-color: rgba(212,168,67,0.35); }
+
+  @media (max-width: 1180px) {
+    .return-ticket-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+    .recent-orders-list { grid-template-columns: 1fr; }
+    .item-meta-grid { grid-template-columns: repeat(2, 1fr); }
+    .packaging-grid { grid-template-columns: repeat(2, 1fr); }
+  }
   
   /* Agent Follow-up Request UI */
   .agent-request-panel { margin-top: 20px; padding: 18px; border: 1px dashed rgba(212,168,67,0.5); border-radius: var(--radius-md); background: linear-gradient(180deg, rgba(212,168,67,0.08), rgba(212,168,67,0.02)); position: relative; }

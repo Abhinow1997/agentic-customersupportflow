@@ -6,6 +6,7 @@ POST /api/instagram-posts/generate-image  — GPT Image 2 image from visual prom
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import threading
@@ -242,7 +243,6 @@ def _call_image_generation(api_key: str, model: str, prompt: str, size: str) -> 
             prompt=prompt,
             size=size,  # type: ignore[arg-type]
             n=1,
-            response_format="url",
         )
     except BadRequestError as exc:
         # Surface image content policy rejections clearly
@@ -251,7 +251,13 @@ def _call_image_generation(api_key: str, model: str, prompt: str, size: str) -> 
             detail=f"Image generation rejected the prompt (content policy): {exc}",
         ) from exc
 
-    url = response.data[0].url
-    if not url:
-        raise ValueError("Image generation returned an empty URL.")
-    return url
+    image_data = response.data[0]
+    url = getattr(image_data, "url", None)
+    if url:
+        return url
+
+    b64_json = getattr(image_data, "b64_json", None)
+    if b64_json:
+        return f"data:image/png;base64,{b64_json}"
+
+    raise ValueError("Image generation returned neither a URL nor base64 image data.")

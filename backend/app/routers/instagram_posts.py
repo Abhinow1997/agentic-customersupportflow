@@ -1,7 +1,7 @@
 """
 POST /api/instagram-posts/generate        — sync (full result at once)
 POST /api/instagram-posts/generate-stream — SSE stream (events per agent stage)
-POST /api/instagram-posts/generate-image  — DALL-E-2 image from visual prompt
+POST /api/instagram-posts/generate-image  — GPT Image 2 image from visual prompt
 """
 from __future__ import annotations
 
@@ -177,12 +177,12 @@ async def generate_instagram_posts_stream(
     )
 
 
-# ── DALL-E image generation endpoint ─────────────────────────────────────────
+# ── GPT Image generation endpoint ────────────────────────────────────────────
 
 @router.post(
     "/generate-image",
     response_model=ImageGenerateResponse,
-    summary="Generate a visual suggestion image with DALL-E from the content agent's visual prompt",
+    summary="Generate a visual suggestion image with GPT Image 2 from the content agent's visual prompt",
 )
 async def generate_image(payload: ImageGenerateRequest) -> ImageGenerateResponse:
     settings = get_settings()
@@ -190,15 +190,14 @@ async def generate_image(payload: ImageGenerateRequest) -> ImageGenerateResponse
     if not settings.OPENAI_API_KEY:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured.")
 
-    # DALL-E-2 prompt length limit is 1000 chars; DALL-E-3 is 4000.
     prompt = payload.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt must not be empty.")
 
     logger.info(
-        "DALLE_REQUEST model=%s size=%s prompt_len=%d",
-        settings.DALLE_MODEL,
-        settings.DALLE_IMAGE_SIZE,
+        "IMAGE_REQUEST model=%s size=%s prompt_len=%d",
+        settings.IMAGE_MODEL,
+        settings.IMAGE_SIZE,
         len(prompt),
     )
 
@@ -207,33 +206,33 @@ async def generate_image(payload: ImageGenerateRequest) -> ImageGenerateResponse
         loop = asyncio.get_event_loop()
         image_url = await loop.run_in_executor(
             None,
-            lambda: _call_dalle(
+            lambda: _call_image_generation(
                 api_key=settings.OPENAI_API_KEY,
-                model=settings.DALLE_MODEL,
+                model=settings.IMAGE_MODEL,
                 prompt=prompt,
-                size=settings.DALLE_IMAGE_SIZE,
+                size=settings.IMAGE_SIZE,
             ),
         )
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("DALLE_ERROR %s", exc)
+        logger.error("IMAGE_ERROR %s", exc)
         raise HTTPException(status_code=500, detail=f"Image generation failed: {exc}") from exc
 
-    logger.info("DALLE_COMPLETE url_prefix=%s", image_url[:60] if image_url else "none")
+    logger.info("IMAGE_COMPLETE url_prefix=%s", image_url[:60] if image_url else "none")
 
     return ImageGenerateResponse.model_validate(
         {
             "imageUrl": image_url,
             "prompt": prompt,
-            "model": settings.DALLE_MODEL,
-            "size": settings.DALLE_IMAGE_SIZE,
+            "model": settings.IMAGE_MODEL,
+            "size": settings.IMAGE_SIZE,
         }
     )
 
 
-def _call_dalle(api_key: str, model: str, prompt: str, size: str) -> str:
-    """Synchronous DALL-E call — runs inside a thread executor."""
+def _call_image_generation(api_key: str, model: str, prompt: str, size: str) -> str:
+    """Synchronous OpenAI image-generation call — runs inside a thread executor."""
     from openai import OpenAI, BadRequestError
 
     client = OpenAI(api_key=api_key)
@@ -246,13 +245,13 @@ def _call_dalle(api_key: str, model: str, prompt: str, size: str) -> str:
             response_format="url",
         )
     except BadRequestError as exc:
-        # Surface DALL-E content policy rejections clearly
+        # Surface image content policy rejections clearly
         raise HTTPException(
             status_code=422,
-            detail=f"DALL-E rejected the prompt (content policy): {exc}",
+            detail=f"Image generation rejected the prompt (content policy): {exc}",
         ) from exc
 
     url = response.data[0].url
     if not url:
-        raise ValueError("DALL-E returned an empty image URL.")
+        raise ValueError("Image generation returned an empty URL.")
     return url

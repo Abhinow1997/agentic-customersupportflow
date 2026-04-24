@@ -23,7 +23,7 @@
   let isGeneratingImage = false;
   let generatedImageUrl = null;
   let imageGenError = '';
-  let imageModel = 'dall-e-2';
+  let imageModel = 'gpt-image-2';
   let imageSize = '512x512';
 
   // Pre-fill prompt when flow result arrives
@@ -175,7 +175,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       generatedImageUrl = data.imageUrl;
-      imageModel = data.model ?? 'dall-e-2';
+      imageModel = data.model ?? 'gpt-image-2';
       imageSize = data.size ?? '512x512';
     } catch (e) {
       imageGenError = e.message ?? 'Image generation failed.';
@@ -330,14 +330,14 @@
         {/if}
 
         <!-- ═══════════════════════════════════════════════════════════════ -->
-        <!-- 2. VISUAL SUGGESTION GENERATOR — DALL-E-2                     -->
+        <!-- 2. VISUAL SUGGESTION GENERATOR — GPT Image 2                 -->
         <!-- ═══════════════════════════════════════════════════════════════ -->
         {#if hasVisualPrompt}
           <div class="visual-gen-card">
             <div class="section-label">
               <span class="section-icon">🎨</span>
               Visual Suggestion Generator
-              <span class="dalle-badge">DALL·E-2</span>
+              <span class="image-model-badge">GPT Image 2</span>
             </div>
 
             <p class="visual-intro">
@@ -381,7 +381,7 @@
                 <div class="skeleton-shimmer"></div>
                 <div class="skeleton-label">
                   <span class="spinner-sm"></span>
-                  Generating image with DALL·E-2 — this takes ~10s...
+                  Generating image with GPT Image 2 — this takes ~10s...
                 </div>
               </div>
             {/if}
@@ -649,7 +649,7 @@
     flex-direction: column;
     gap: 14px;
   }
-  .dalle-badge {
+  .image-model-badge {
     margin-left: auto;
     font-size: 10px; font-family: var(--font-mono); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
     color: #9b7ff0; background: rgba(155,127,240,0.1); border: 1px solid rgba(155,127,240,0.35);

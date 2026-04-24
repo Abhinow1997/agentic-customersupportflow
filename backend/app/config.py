@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str = ""
 
-    DALLE_MODEL: str = "dall-e-2"
-    DALLE_IMAGE_SIZE: str = "512x512"
+    IMAGE_MODEL: str = "gpt-image-2"
+    IMAGE_SIZE: str = "512x512"
 
     CHROMA_PERSIST_DIR: str = "./chroma_walmart_policies"
     CHROMA_COLLECTION: str = "walmart_policies"

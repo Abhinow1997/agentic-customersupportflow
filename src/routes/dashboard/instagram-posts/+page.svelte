@@ -1,5 +1,5 @@
 <script>
-  const FASTAPI = 'http://localhost:8000';
+  import { FASTAPI_URL } from '$lib/config.js';
 
   // ── Form state ────────────────────────────────────────────────────────────
   let retrievalSetting = 'yes';
@@ -117,7 +117,7 @@
 
     isStreaming = true;
     try {
-      const res = await fetch(`${FASTAPI}/api/instagram-posts/generate-stream`, {
+      const res = await fetch(`${FASTAPI_URL}/api/instagram-posts/generate-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -167,7 +167,7 @@
     generatedImageUrl = null;
 
     try {
-      const res = await fetch(`${FASTAPI}/api/instagram-posts/generate-image`, {
+      const res = await fetch(`${FASTAPI_URL}/api/instagram-posts/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: customVisualPrompt.trim() }),

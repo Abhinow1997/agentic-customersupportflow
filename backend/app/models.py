@@ -171,6 +171,7 @@ class TicketTriageModel(BaseModel):
 
 class TicketResponse(BaseModel):
     id: str
+    ticket_number: str = Field("", alias="ticketNumber")
     return_amt: str = Field("0.00", alias="returnAmt")
     net_loss: str   = Field("0.00", alias="netLoss")
     fee: str = "0.00"
@@ -184,6 +185,9 @@ class TicketResponse(BaseModel):
     updated: str = ""
     status: str = "Open"
     resolution: str | None = None
+    decision_id: str | None = Field(None, alias="decisionId")
+    decision: str | None = None
+    decision_logged_at: str | None = Field(None, alias="decisionLoggedAt")
     priority: str = "medium"
     triage: TicketTriageModel
     sentiment: str = "neutral"
@@ -215,6 +219,41 @@ class UpdateTicketResponse(BaseModel):
     id: str
     status: str
     resolution: str | None = None
+
+
+class CloseTicketRequest(BaseModel):
+    ticket_number: str = Field(..., alias="ticketNumber")
+    ticket_id: str | None = Field(None, alias="ticketId")
+    status: Literal["Open", "Closed"] = "Closed"
+    resolution: str = ""
+    decision: Literal["approved", "denied"]
+    decision_note: str = Field("", alias="decisionNote")
+    customer_name: str = Field("", alias="customerName")
+    customer_email: str = Field("", alias="customerEmail")
+    customer_tier: str = Field("Bronze", alias="customerTier")
+    item_sk: int | None = Field(None, alias="itemSk")
+    item_name: str = Field("", alias="itemName")
+    item_category: str = Field("", alias="itemCategory")
+    return_qty: int = Field(1, alias="returnQty")
+    packaging_condition: str = Field("", alias="packagingCondition")
+    packaging_factor: float = Field(0.0, alias="packagingFactor")
+    return_amt: float = Field(0.0, alias="returnAmt")
+    net_loss: float = Field(0.0, alias="netLoss")
+    assessment_confidence: float = Field(0.0, alias="assessmentConfidence")
+    assessment_complete: bool = Field(False, alias="assessmentComplete")
+    questions_validated: int = Field(0, alias="questionsValidated")
+    assessment_summary: str = Field("", alias="assessmentSummary")
+
+    model_config = {"populate_by_name": True}
+
+
+class CloseTicketResponse(BaseModel):
+    ok: bool
+    ticket_id: str = Field(..., alias="ticketId")
+    status: str
+    decision: str
+    decision_id: str = Field(..., alias="decisionId")
+    decision_logged_at: str = Field(..., alias="decisionLoggedAt")
 
 
 # ── Create ticket ─────────────────────────────────────────────────────────

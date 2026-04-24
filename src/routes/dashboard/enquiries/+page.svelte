@@ -1,8 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-
-  const FASTAPI = 'http://localhost:8000';
+  import { FASTAPI_URL } from '$lib/config.js';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
   let ticketType = 'enquiry';
@@ -125,7 +124,7 @@
       const fd = new FormData();
       fd.append('audio', vmAudioBlob, 'voicemail.webm');
       fd.append('ticket_ref', 'enquiry-' + Date.now());
-      const res  = await fetch(`${FASTAPI}/api/enquiry/transcribe`, { method: 'POST', body: fd });
+      const res  = await fetch(`${FASTAPI_URL}/api/enquiry/transcribe`, { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       enquiryRawMessage = data.transcript ?? '';
@@ -321,7 +320,7 @@ Priya`,
     if (!lookupEmail.trim()) return;
     lookupLoading = true; lookupStatus = '';
     try {
-      const res  = await fetch(`${FASTAPI}/api/customers?email=${encodeURIComponent(lookupEmail.trim())}`);
+      const res  = await fetch(`${FASTAPI_URL}/api/customers?email=${encodeURIComponent(lookupEmail.trim())}`);
       const data = await res.json();
       if (data.found) {
         custName = data.customer.name; custEmail = data.customer.email;
@@ -344,7 +343,7 @@ Priya`,
     if (!String(itemLookupSk).trim()) return;
     itemLookupLoading = true; itemLookupStatus = ''; itemDetails = null;
     try {
-      const res  = await fetch(`${FASTAPI}/api/items?sk=${encodeURIComponent(String(itemLookupSk).trim())}`);
+      const res  = await fetch(`${FASTAPI_URL}/api/items?sk=${encodeURIComponent(String(itemLookupSk).trim())}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.found) {
@@ -366,7 +365,7 @@ Priya`,
     if (!complaintDesc.trim() && !packagingCondition) return;
     aiSuggestLoading = true; aiSuggestedText = '';
     try {
-      const res = await fetch(`${FASTAPI}/api/suggest-reason`, {
+      const res = await fetch(`${FASTAPI_URL}/api/suggest-reason`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -449,7 +448,7 @@ Priya`,
       returnAmt: 0, netLoss: 0,
     };
     try {
-      const res  = await fetch(`${FASTAPI}/api/tickets/create`, {
+      const res  = await fetch(`${FASTAPI_URL}/api/tickets/create`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });

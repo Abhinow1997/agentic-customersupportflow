@@ -1,6 +1,7 @@
 // src/lib/stores.js
 import { writable, derived, get } from 'svelte/store'; // derived still used for selectedTicket
 import { MOCK_TICKETS } from './data.js';
+import { FASTAPI_URL } from './config.js';
 
 function makePersistedJSONStore(storageKey, initialValue) {
   let initial = initialValue;
@@ -30,9 +31,6 @@ function makePersistedSession() {
   return makePersistedJSONStore('arcella_session', null);
 }
 export const session = makePersistedSession();
-
-// FastAPI base URL — all data + AI calls go through FastAPI
-const FASTAPI_URL = 'http://localhost:8000';
 
 // Tickets — persisted so the return listing survives navigation
 export const tickets        = makePersistedJSONStore('arcella_tickets_queue_v2', []);

@@ -26,6 +26,8 @@ class LogDecisionRequest(BaseModel):
     """
     Frontend sends the agent's decision after assessment
     """
+    ticket_number: str = Field("", alias="ticketNumber")
+
     # Customer info
     customer_email: str
     customer_name: str = ""
@@ -110,12 +112,19 @@ async def log_decision(payload: LogDecisionRequest) -> LogDecisionResponse:
             role=settings.SNOWFLAKE_ROLE,
         )
         cursor = conn.cursor()
+        cursor.execute(
+            """
+            ALTER TABLE IF EXISTS RETURN_DECISIONS
+            ADD COLUMN IF NOT EXISTS SR_TICKET_NUMBER VARCHAR(50)
+            """
+        )
         
         # ── Create table if not exists ────────────────────────────────────
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS RETURN_DECISIONS (
             DECISION_ID VARCHAR(50) PRIMARY KEY,
             LOGGED_AT TIMESTAMP_NTZ,
+            SR_TICKET_NUMBER VARCHAR(50),
             
             -- Customer
             CUSTOMER_EMAIL VARCHAR(255),
@@ -155,6 +164,7 @@ async def log_decision(payload: LogDecisionRequest) -> LogDecisionResponse:
         insert_sql = """
         INSERT INTO RETURN_DECISIONS (
             DECISION_ID, LOGGED_AT,
+            SR_TICKET_NUMBER,
             CUSTOMER_EMAIL, CUSTOMER_NAME, CUSTOMER_TIER,
             ITEM_SK, ITEM_NAME, ITEM_CATEGORY,
             RETURN_QTY, PACKAGING_CONDITION, PACKAGING_FACTOR,
@@ -176,6 +186,7 @@ async def log_decision(payload: LogDecisionRequest) -> LogDecisionResponse:
         
         cursor.execute(insert_sql, (
             decision_id, logged_at,
+            payload.ticket_number or None,
             payload.customer_email, payload.customer_name, payload.customer_tier,
             payload.item_sk, payload.item_name, payload.item_category,
             payload.return_qty, payload.packaging_condition, payload.packaging_factor,

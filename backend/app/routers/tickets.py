@@ -14,11 +14,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.db import run_query
+from app.db import get_connection, run_query
 from app.models import (
     TicketListResponse, TicketResponse, TicketItemModel,
     TicketCustomerModel, TicketTriageModel,
     UpdateTicketRequest, UpdateTicketResponse,
+    CloseTicketRequest, CloseTicketResponse,
     CreateTicketRequest, CreateTicketResponse,
 )
 
@@ -40,8 +41,16 @@ async def list_tickets(
         rows = run_query(
             f"""
             SELECT
+                rd.DECISION_ID,
+                rd.SR_TICKET_NUMBER AS RD_SR_TICKET_NUMBER,
+                rd.CUSTOMER_NAME AS RD_CUSTOMER_NAME,
+                rd.ITEM_NAME AS RD_ITEM_NAME,
+                rd.DECISION,
+                rd.LOGGED_AT AS RD_LOGGED_AT,
                 sr.*
             FROM SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS sr
+            LEFT JOIN SYNTHETIC_COMPANYDB.COMPANY.RETURN_DECISIONS rd
+                ON rd.SR_TICKET_NUMBER = sr.SR_TICKET_NUMBER
             ORDER BY sr.SR_RETURNED_DATE_SK DESC, sr.SR_TICKET_NUMBER
             LIMIT {limit} OFFSET {offset}
             """
@@ -90,6 +99,266 @@ async def update_ticket(body: UpdateTicketRequest) -> UpdateTicketResponse:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# POST /api/tickets/close
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â†”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+@router.post("/close", response_model=CloseTicketResponse, summary="Manually close a return ticket")
+async def close_ticket(body: CloseTicketRequest) -> CloseTicketResponse:
+    raw_ticket_number = str(body.ticket_number).strip()
+    raw_ticket_id = str(body.ticket_id or "").strip()
+    ticket_number = raw_ticket_number.replace("TKT-", "")
+
+    source_rows = []
+    lookup_candidates = [ticket_number, raw_ticket_number, raw_ticket_id, raw_ticket_id.replace("TKT-", "")]
+    if ticket_number and not raw_ticket_number.startswith("TKT-"):
+        lookup_candidates.append(f"TKT-{ticket_number}")
+    if raw_ticket_number.startswith("TKT-"):
+        lookup_candidates.append(raw_ticket_number.replace("TKT-", ""))
+    if raw_ticket_id and not raw_ticket_id.startswith("TKT-"):
+        lookup_candidates.append(f"TKT-{raw_ticket_id}")
+
+    for candidate in dict.fromkeys(c for c in lookup_candidates if c):
+        source_rows = run_query(
+            """
+            SELECT *
+            FROM SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS
+            WHERE CAST(SR_TICKET_NUMBER AS VARCHAR) = %s
+            LIMIT 1
+            """,
+            (candidate,),
+        )
+        if source_rows:
+            ticket_number = candidate.replace("TKT-", "")
+            break
+
+    if not source_rows:
+        fallback_clauses = []
+        fallback_params: list[Any] = []
+
+        if body.item_sk is not None:
+            fallback_clauses.append("SR_ITEM_SK = %s")
+            fallback_params.append(int(body.item_sk))
+        if body.return_qty:
+            fallback_clauses.append("SR_RETURN_QUANTITY = %s")
+            fallback_params.append(int(body.return_qty))
+        if body.return_amt:
+            fallback_clauses.append("ROUND(SR_RETURN_AMT, 2) = ROUND(%s, 2)")
+            fallback_params.append(float(body.return_amt))
+        if body.net_loss:
+            fallback_clauses.append("ROUND(SR_NET_LOSS, 2) = ROUND(%s, 2)")
+            fallback_params.append(float(body.net_loss))
+
+        if fallback_clauses:
+            fallback_sql = (
+                "SELECT * "
+                "FROM SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS "
+                f"WHERE {' AND '.join(fallback_clauses)} "
+                "ORDER BY SR_RETURNED_DATE_SK DESC, SR_TICKET_NUMBER DESC "
+                "LIMIT 1"
+            )
+            source_rows = run_query(fallback_sql, tuple(fallback_params))
+            if source_rows:
+                row_ticket = source_rows[0].get("SR_TICKET_NUMBER")
+                ticket_number = str(row_ticket or ticket_number).replace("TKT-", "")
+
+    if not source_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Ticket {body.ticket_number} not found in STORE_RETURNS. "
+                "This usually means the UI ticket id does not match the Snowflake ticket number."
+            ),
+        )
+
+    row = source_rows[0]
+    status = body.status or "Closed"
+    resolution = body.resolution or row.get("SR_RESOLUTION") or ""
+    decision_note = body.decision_note or resolution
+    logged_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    customer_name = body.customer_name or f"Customer #{row.get('SR_CUSTOMER_SK') or 'unknown'}"
+    item_name = body.item_name or f"Return Item #{row.get('SR_ITEM_SK') or 'unknown'}"
+    customer_email = body.customer_email or ""
+    customer_tier = body.customer_tier or "Bronze"
+    item_category = body.item_category or "Returns"
+    item_sk = int(body.item_sk or row.get("SR_ITEM_SK") or 0)
+    return_qty = int(body.return_qty or row.get("SR_RETURN_QUANTITY") or 1)
+    packaging_condition = body.packaging_condition or ""
+    packaging_factor = float(body.packaging_factor or 0)
+    return_amt = float(body.return_amt or row.get("SR_RETURN_AMT") or 0)
+    net_loss = float(body.net_loss or row.get("SR_NET_LOSS") or 0)
+    assessment_confidence = float(body.assessment_confidence or 0)
+    assessment_complete = bool(body.assessment_complete)
+    questions_validated = int(body.questions_validated or 0)
+    assessment_summary = body.assessment_summary or ""
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            ALTER TABLE IF EXISTS RETURN_DECISIONS
+            ADD COLUMN IF NOT EXISTS SR_TICKET_NUMBER VARCHAR(50)
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS RETURN_DECISIONS (
+                DECISION_ID VARCHAR(50) PRIMARY KEY,
+                LOGGED_AT TIMESTAMP_NTZ,
+                SR_TICKET_NUMBER VARCHAR(50),
+                CUSTOMER_EMAIL VARCHAR(255),
+                CUSTOMER_NAME VARCHAR(255),
+                CUSTOMER_TIER VARCHAR(50),
+                ITEM_SK INTEGER,
+                ITEM_NAME VARCHAR(500),
+                ITEM_CATEGORY VARCHAR(255),
+                RETURN_QTY INTEGER,
+                PACKAGING_CONDITION VARCHAR(50),
+                PACKAGING_FACTOR NUMBER(4,2),
+                RETURN_AMT NUMBER(10,2),
+                NET_LOSS NUMBER(10,2),
+                ASSESSMENT_CONFIDENCE NUMBER(4,3),
+                ASSESSMENT_COMPLETE BOOLEAN,
+                QUESTIONS_VALIDATED INTEGER,
+                ASSESSMENT_SUMMARY VARCHAR(2000),
+                DECISION VARCHAR(20),
+                DECISION_NOTE VARCHAR(1000)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            UPDATE SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS
+            SET SR_STATUS = %s,
+                SR_RESOLUTION = %s
+            WHERE SR_TICKET_NUMBER = %s
+            """,
+            (status, resolution, ticket_number),
+        )
+
+        existing_decision = run_query(
+            """
+            SELECT DECISION_ID
+            FROM RETURN_DECISIONS
+            WHERE SR_TICKET_NUMBER = %s
+            LIMIT 1
+            """,
+            (ticket_number,),
+        )
+
+        if existing_decision:
+            decision_id = existing_decision[0]["DECISION_ID"]
+            cursor.execute(
+                """
+                UPDATE RETURN_DECISIONS
+                SET LOGGED_AT = %s,
+                    CUSTOMER_EMAIL = %s,
+                    CUSTOMER_NAME = %s,
+                    CUSTOMER_TIER = %s,
+                    ITEM_SK = %s,
+                    ITEM_NAME = %s,
+                    ITEM_CATEGORY = %s,
+                    RETURN_QTY = %s,
+                    PACKAGING_CONDITION = %s,
+                    PACKAGING_FACTOR = %s,
+                    RETURN_AMT = %s,
+                    NET_LOSS = %s,
+                    ASSESSMENT_CONFIDENCE = %s,
+                    ASSESSMENT_COMPLETE = %s,
+                    QUESTIONS_VALIDATED = %s,
+                    ASSESSMENT_SUMMARY = %s,
+                    DECISION = %s,
+                    DECISION_NOTE = %s
+                WHERE DECISION_ID = %s
+                """,
+                (
+                    logged_at,
+                    customer_email,
+                    customer_name,
+                    customer_tier,
+                    item_sk,
+                    item_name,
+                    item_category,
+                    return_qty,
+                    packaging_condition,
+                    packaging_factor,
+                    return_amt,
+                    net_loss,
+                    assessment_confidence,
+                    assessment_complete,
+                    questions_validated,
+                    assessment_summary,
+                    body.decision,
+                    decision_note,
+                    decision_id,
+                ),
+            )
+        else:
+            decision_id = f"RD-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{ticket_number}"
+            cursor.execute(
+                """
+                INSERT INTO RETURN_DECISIONS (
+                    DECISION_ID, LOGGED_AT, SR_TICKET_NUMBER,
+                    CUSTOMER_EMAIL, CUSTOMER_NAME, CUSTOMER_TIER,
+                    ITEM_SK, ITEM_NAME, ITEM_CATEGORY,
+                    RETURN_QTY, PACKAGING_CONDITION, PACKAGING_FACTOR,
+                    RETURN_AMT, NET_LOSS,
+                    ASSESSMENT_CONFIDENCE, ASSESSMENT_COMPLETE, QUESTIONS_VALIDATED,
+                    ASSESSMENT_SUMMARY,
+                    DECISION, DECISION_NOTE
+                ) VALUES (
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s,
+                    %s, %s
+                )
+                """,
+                (
+                    decision_id,
+                    logged_at,
+                    ticket_number,
+                    customer_email,
+                    customer_name,
+                    customer_tier,
+                    item_sk,
+                    item_name,
+                    item_category,
+                    return_qty,
+                    packaging_condition,
+                    packaging_factor,
+                    return_amt,
+                    net_loss,
+                    assessment_confidence,
+                    assessment_complete,
+                    questions_validated,
+                    assessment_summary,
+                    body.decision,
+                    decision_note,
+                ),
+            )
+
+        conn.commit()
+    except Exception as exc:
+        logger.error("[POST /api/tickets/close] ERROR: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to close ticket: {exc}") from exc
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        conn.close()
+
+    return CloseTicketResponse(
+        ok=True,
+        ticketId=f"TKT-{ticket_number}",
+        status=status,
+        decision=body.decision,
+        decisionId=decision_id,
+        decisionLoggedAt=logged_at,
+    )
+
 # POST /api/tickets/create
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -351,6 +620,7 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
 
     return TicketResponse(
         id=ticket_id,
+        ticketNumber=str(ticket_num or ""),
         returnAmt=f"{return_amt:.2f}",
         netLoss=f"{net_loss:.2f}",
         fee=f"{float(row.get('SR_FEE') or 0):.2f}",
@@ -384,6 +654,11 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
         updated=created_str,
         status=(row.get("SR_STATUS") or "Open"),
         resolution=(row.get("SR_RESOLUTION") or None),
+        decision_id=(row.get("DECISION_ID") or None),
+        decision=(row.get("DECISION") or None),
+        decision_logged_at=(
+            str(row.get("RD_LOGGED_AT")) if row.get("RD_LOGGED_AT") is not None else None
+        ),
         priority=final_priority,
         triage=TicketTriageModel(
             action=triage_data.get("action", ""),

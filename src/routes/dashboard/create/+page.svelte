@@ -1,8 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId } from '$lib/stores.js';
-
-  const FASTAPI = 'http://localhost:8000';
+  import { FASTAPI_URL } from '$lib/config.js';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
   let ticketType = 'return';
@@ -42,6 +41,7 @@
   let ordersLoading = false;
   let ordersError = '';
   let dateFilter = 'all'; // 'all' | '7'
+  let statusFilter = 'all'; // 'all' | 'open' | 'closed'
 
   onMount(() => {
     if ($tickets.length === 0) {
@@ -95,6 +95,12 @@
         }
       }
     }
+
+    // Status filter
+    if (statusFilter !== 'all') {
+      const normalizedStatus = normalizeStatus(t.status);
+      if (normalizedStatus !== statusFilter) return false;
+    }
     
     // Search filter
     if (returnSearch.trim()) {
@@ -143,6 +149,8 @@
       }
       return !isNaN(ticketDate.getTime()) && ticketDate >= cutoff;
     }).length,
+    open: $tickets.filter(t => normalizeStatus(t.status) === 'open').length,
+    closed: $tickets.filter(t => normalizeStatus(t.status) === 'closed').length,
   };
 
   async function fetchRecentOrders(forceRefresh = false) {
@@ -163,7 +171,7 @@
     ordersError = '';
     try {
       // NOTE: Replace this endpoint path if yours differs
-      const res = await fetch(`${FASTAPI}/api/recent_orders`);
+      const res = await fetch(`${FASTAPI_URL}/api/recent_orders`);
       if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
       const data = await res.json();
       
@@ -228,10 +236,43 @@
   function selectReturnTicket(ticket) {
     selectedTicket = ticket;
     selectedTicketId.set(ticket.id);
+    manualCloseDecision = ticket.decision ?? 'approved';
+    manualCloseResolution = ticket.resolution ?? ticket.returnReason ?? ticket.subject ?? '';
+    manualCloseError = '';
   }
 
   function setReturnSearch(event) {
     returnSearch = event.target.value;
+  }
+
+  function formatApiError(err, fallback = 'Request failed') {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err;
+    if (Array.isArray(err)) {
+      return err
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (!item || typeof item !== 'object') return String(item);
+          const parts = [];
+          if (item.loc) parts.push(`${Array.isArray(item.loc) ? item.loc.join('.') : item.loc}`);
+          if (item.msg) parts.push(item.msg);
+          if (item.type) parts.push(`(${item.type})`);
+          return parts.length ? parts.join(': ') : JSON.stringify(item);
+        })
+        .join(' | ');
+    }
+    if (typeof err === 'object') {
+      if (typeof err.detail === 'string') return err.detail;
+      if (Array.isArray(err.detail)) return formatApiError(err.detail, fallback);
+      if (err.detail && typeof err.detail === 'object') return formatApiError(err.detail, fallback);
+      if (err.message) return err.message;
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return fallback;
+      }
+    }
+    return String(err);
   }
 
   // ── Package assessment ────────────────────────────────────────────────────
@@ -264,6 +305,10 @@
   let decisionLogged  = false;
   let decisionId      = '';
   let decisionError   = '';
+  let manualCloseSaving = false;
+  let manualCloseError = '';
+  let manualCloseDecision = 'approved';
+  let manualCloseResolution = '';
 
   const PACKAGING_CONDITIONS = [
     { id: 'sealed',    label: 'Sealed / Unopened',    desc: 'Original seal intact, never opened',         factor: 0.05, color: 'green'  },
@@ -347,7 +392,7 @@
       const fd = new FormData();
       fd.append('audio', vmAudioBlob, 'voicemail.webm');
       fd.append('ticket_ref', 'enquiry-' + Date.now());
-      const res  = await fetch(`${FASTAPI}/api/enquiry/transcribe`, { method: 'POST', body: fd });
+      const res  = await fetch(`${FASTAPI_URL}/api/enquiry/transcribe`, { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       enquiryRawMessage = data.transcript ?? '';
@@ -447,7 +492,7 @@
     if (!lookupEmail.trim()) return;
     lookupLoading = true; lookupStatus = '';
     try {
-      const res  = await fetch(`${FASTAPI}/api/customers?email=${encodeURIComponent(lookupEmail.trim())}`);
+      const res  = await fetch(`${FASTAPI_URL}/api/customers?email=${encodeURIComponent(lookupEmail.trim())}`);
       const data = await res.json();
       if (data.found) {
         custName = data.customer.name; custEmail = data.customer.email;
@@ -470,7 +515,7 @@
     if (!String(itemLookupSk).trim()) return;
     itemLookupLoading = true; itemLookupStatus = ''; itemDetails = null;
     try {
-      const res  = await fetch(`${FASTAPI}/api/items?sk=${encodeURIComponent(String(itemLookupSk).trim())}`);
+      const res  = await fetch(`${FASTAPI_URL}/api/items?sk=${encodeURIComponent(String(itemLookupSk).trim())}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (data.found) {
@@ -524,7 +569,7 @@
     }, 1500);
 
     try {
-      const res = await fetch(`${FASTAPI}/api/access_item_return`, {
+      const res = await fetch(`${FASTAPI_URL}/api/access_item_return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildAssessmentPayload(followUpAnswers))
@@ -625,7 +670,7 @@
     const summary = getDecisionSummary(assessmentResult);
     
     try {
-      const res = await fetch(`${FASTAPI}/api/returns/log_decision`, {
+      const res = await fetch(`${FASTAPI_URL}/api/returns/log_decision`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -667,6 +712,118 @@
     }
   }
 
+  async function handleManualCloseTicket() {
+    if (!selectedTicket) return;
+
+    manualCloseSaving = true;
+    manualCloseError = '';
+
+    const ticketNumber = String(selectedTicket.ticketNumber ?? selectedTicket.id ?? '').replace(/^TKT-/, '');
+    const resolution = manualCloseResolution.trim() || (manualCloseDecision === 'approved'
+      ? 'Approved and closed manually'
+      : 'Denied and closed manually');
+
+    const closePayload = {
+      ticketNumber,
+      ticketId: selectedTicket.id ?? '',
+      status: 'Closed',
+      resolution,
+      decision: manualCloseDecision,
+      decisionNote: resolution,
+      customerName: selectedTicket.customer?.name ?? '',
+      customerEmail: selectedTicket.customer?.email ?? '',
+      customerTier: selectedTicket.customer?.tier ?? 'Bronze',
+      itemSk: selectedTicket.item?.sk ?? null,
+      itemName: selectedTicket.item?.name ?? '',
+      itemCategory: selectedTicket.item?.category ?? '',
+      returnQty: selectedTicket.item?.returnQty ?? 1,
+      packagingCondition: selectedTicket.packagingCondition ?? '',
+      packagingFactor: selectedTicket.packagingFactor ?? 0,
+      returnAmt: Number(selectedTicket.returnAmt ?? 0),
+      netLoss: Number(selectedTicket.netLoss ?? 0),
+      assessmentConfidence: selectedTicket.supervisor?.confidence_score ?? 0,
+      assessmentComplete: manualCloseDecision === 'approved',
+      questionsValidated: (selectedTicket.triage?.flags ?? []).length,
+      assessmentSummary: selectedTicket.preview ?? selectedTicket.returnReason ?? '',
+    };
+
+    const legacyLogPayload = {
+      ticketNumber,
+      customer_name: closePayload.customerName,
+      customer_email: closePayload.customerEmail,
+      customer_tier: closePayload.customerTier,
+      item_sk: closePayload.itemSk ?? 0,
+      item_name: closePayload.itemName,
+      item_category: closePayload.itemCategory,
+      return_qty: closePayload.returnQty,
+      packaging_condition: closePayload.packagingCondition,
+      packaging_factor: closePayload.packagingFactor,
+      return_amt: closePayload.returnAmt,
+      net_loss: closePayload.netLoss,
+      assessment_confidence: closePayload.assessmentConfidence,
+      assessment_complete: closePayload.assessmentComplete,
+      questions_validated: closePayload.questionsValidated,
+      decision: closePayload.decision,
+      decision_note: closePayload.decisionNote,
+      assessment_summary: closePayload.assessmentSummary,
+    };
+
+    try {
+      let useLegacyFlow = false;
+
+      const closeRes = await fetch(`${FASTAPI_URL}/api/tickets/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(closePayload),
+      });
+
+      if (closeRes.ok) {
+        const closeData = await closeRes.json().catch(() => ({}));
+        if (!closeRes.ok) throw new Error(closeData.detail ?? `HTTP ${closeRes.status}`);
+      } else {
+        const closeData = await closeRes.json().catch(() => ({}));
+        const notFound = closeRes.status === 404 && String(closeData.detail ?? '').toLowerCase().includes('not found');
+        useLegacyFlow = notFound;
+        if (!useLegacyFlow) {
+          throw new Error(formatApiError(closeData.detail, `HTTP ${closeRes.status}`));
+        }
+      }
+
+      if (useLegacyFlow) {
+        const legacyDecisionRes = await fetch(`${FASTAPI_URL}/api/returns/log_decision`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(legacyLogPayload),
+        });
+        const legacyDecisionData = await legacyDecisionRes.json().catch(() => ({}));
+        if (!legacyDecisionRes.ok) throw new Error(formatApiError(legacyDecisionData.detail, `HTTP ${legacyDecisionRes.status}`));
+
+        const legacyPatchRes = await fetch(`${FASTAPI_URL}/api/tickets`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: selectedTicket.id ?? ticketNumber,
+            status: 'Closed',
+            resolution,
+          }),
+        });
+        const legacyPatchData = await legacyPatchRes.json().catch(() => ({}));
+        if (!legacyPatchRes.ok) throw new Error(formatApiError(legacyPatchData.detail, `HTTP ${legacyPatchRes.status}`));
+      }
+
+      await loadTickets(true);
+      selectedTicket = null;
+      selectedTicketId.set(null);
+      statusFilter = 'all';
+      manualCloseDecision = 'approved';
+      manualCloseResolution = '';
+    } catch (e) {
+      manualCloseError = e.message;
+    } finally {
+      manualCloseSaving = false;
+    }
+  }
+
   // ── Navigation ────────────────────────────────────────────────────────────
   function nextStep() { if (step < 2) step++; }
   function prevStep() { if (step > 1) step--; }
@@ -689,6 +846,8 @@
       channel: 'email', priority,
       packagingCondition,
       packagingFactor,
+      reasonDesc: complaintDesc.trim() || 'Customer requested a return',
+      complaintDesc: complaintDesc.trim(),
       ...(ticketType === 'return' ? {
         item: {
           sk:        itemDetails?.sk,
@@ -712,7 +871,7 @@
       }),
     };
     try {
-      const res  = await fetch(`${FASTAPI}/api/tickets/create`, {
+      const res  = await fetch(`${FASTAPI_URL}/api/tickets/create`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -720,6 +879,7 @@
       if (!res.ok) throw new Error(data.message ?? `HTTP ${res.status}`);
       submitSuccess   = true;
       createdTicketId = data.ticketId ?? '—';
+      await loadTickets(true);
     } catch (e) { submitError = e.message; }
     finally { submitting = false; }
   }
@@ -729,6 +889,9 @@
     workspaceView = 'queue';
     returnTab = 'All';
     returnSearch = '';
+    statusFilter = 'all';
+    selectedTicket = null;
+    selectedTicketId.set(null);
     if ($tickets.length === 0) {
       loadTickets();
     }
@@ -743,6 +906,8 @@
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
     priority = 'medium'; ticketType = 'return';
+    manualCloseError = ''; manualCloseSaving = false; manualCloseDecision = 'approved'; manualCloseResolution = '';
+    selectedTicket = null; selectedTicketId.set(null); statusFilter = 'all';
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -783,22 +948,6 @@
   </header>
 
   <div class="page-body">
-
-    {#if submitSuccess}
-      <div class="success-card">
-        <div class="success-icon">✓</div>
-        <h3>Ticket Created Successfully</h3>
-        <div class="success-id">{createdTicketId}</div>
-        <p class="success-detail">
-          Return ticket for <strong>{custName}</strong> has been created.
-          <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
-        </p>
-        <div class="success-actions">
-        <button type="button" class="btn btn-primary" on:click={goToQueue}>View Returned Items</button>
-        <button type="button" class="btn btn-secondary" on:click={createAnother}>Create Another</button>
-        </div>
-      </div>
-    {/if}
 
       <div class="view-switcher">
         <button type="button" class="view-card" class:active={workspaceView === 'create'} on:click={() => setWorkspaceView('create')}>
@@ -845,6 +994,14 @@
                 <span class="queue-summary-value">{$tickets.length}</span>
               </div>
               <div class="queue-summary-item">
+                <span class="queue-summary-label">Open</span>
+                <span class="queue-summary-value">{dateFilterCounts.open}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Closed</span>
+                <span class="queue-summary-value">{dateFilterCounts.closed}</span>
+              </div>
+              <div class="queue-summary-item">
                 <span class="queue-summary-label">Showing</span>
                 <span class="queue-summary-value">{filteredReturnTickets.length}</span>
               </div>
@@ -884,6 +1041,21 @@
               </button>
             </div>
 
+            <div class="chip-group" style="margin-top: 10px;">
+              <button type="button" class="chip" class:selected={statusFilter === 'all'} on:click={() => statusFilter = 'all'}>
+                All Status
+                <span class="chip-count">{$tickets.length}</span>
+              </button>
+              <button type="button" class="chip" class:selected={statusFilter === 'open'} on:click={() => statusFilter = 'open'}>
+                Open
+                <span class="chip-count">{dateFilterCounts.open}</span>
+              </button>
+              <button type="button" class="chip" class:selected={statusFilter === 'closed'} on:click={() => statusFilter = 'closed'}>
+                Closed
+                <span class="chip-count">{dateFilterCounts.closed}</span>
+              </button>
+            </div>
+
             {#if $ticketsError}
               <div class="error-banner" style="margin-top: 12px;">⚠ {$ticketsError}</div>
             {/if}
@@ -899,6 +1071,9 @@
                         <span class="rtc-id">{t.id}</span>
                         <span class="rtc-status rtc-status-{normalizeStatus(t.status)}">{statusLabel(t.status)}</span>
                         <span class="rtc-date">{formatDateStr(t.created)}</span>
+                        {#if t.decision}
+                          <span class="rtc-status rtc-status-{t.decision}">{t.decision}</span>
+                        {/if}
                       </div>
                       <div class="rtc-title">{truncate(t.returnReason ?? t.resolution ?? t.subject ?? t.id, 54)}</div>
                       <div class="rtc-meta">
@@ -968,6 +1143,50 @@
                           <div>{selectedTicket.item.name ?? '—'}</div>
                           <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
                             SK: {selectedTicket.item.sk ?? '—'}
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if selectedTicket.decision}
+                      <div class="ticket-detail-grid">
+                        <div class="ticket-detail-section">
+                          <div class="detail-label">Decision</div>
+                          <div class="detail-value">
+                            <span class="rtc-status rtc-status-{selectedTicket.decision}">{selectedTicket.decision}</span>
+                          </div>
+                        </div>
+                        <div class="ticket-detail-section">
+                          <div class="detail-label">Decision Log</div>
+                          <div class="detail-value">{selectedTicket.decisionId ?? 'â€”'}</div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    {#if normalizeStatus(selectedTicket.status) === 'open'}
+                      <div class="manual-close-panel">
+                        <div class="ticket-detail-section">
+                          <div class="detail-label">Manual Close</div>
+                          <div class="manual-close-grid">
+                            <label class="manual-close-field">
+                              <span>Decision</span>
+                              <select bind:value={manualCloseDecision}>
+                                <option value="approved">Approved</option>
+                                <option value="denied">Denied</option>
+                              </select>
+                            </label>
+                            <label class="manual-close-field">
+                              <span>Resolution</span>
+                              <textarea bind:value={manualCloseResolution} rows="4" placeholder="Add the closure note or final resolution..."></textarea>
+                            </label>
+                          </div>
+                          {#if manualCloseError}
+                            <div class="error-banner" style="margin-top: 12px;">âš  {manualCloseError}</div>
+                          {/if}
+                          <div class="manual-close-actions">
+                            <button type="button" class="btn btn-submit btn-sm" on:click={handleManualCloseTicket} disabled={manualCloseSaving}>
+                              {#if manualCloseSaving}<span class="spinner-sm"></span> Closing...{:else}Close Ticket{/if}
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -1104,10 +1323,25 @@
 
             <div class="step-actions">
               <div></div>
-              <button class="btn btn-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
-                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Return Ticket{/if}
-              </button>
+              
             </div>
+            {#if submitSuccess}
+              <div class="success-card success-inline">
+                <div class="success-icon">✓</div>
+                <div class="success-inline-body">
+                  <h3>Ticket Created Successfully</h3>
+                  <div class="success-id">{createdTicketId}</div>
+                  <p class="success-detail">
+                    Return ticket for <strong>{custName}</strong> has been created.
+                    <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
+                  </p>
+                  <div class="success-actions">
+                    <button type="button" class="btn btn-primary" on:click={goToQueue}>View Returned Items</button>
+                    <button type="button" class="btn btn-secondary" on:click={createAnother}>Create Another</button>
+                  </div>
+                </div>
+              </div>
+            {/if}
 
         {:else if step === 2 && ticketType === 'return'}
 
@@ -1244,9 +1478,31 @@
                   </div>
                 </div>
               {:else}
-                <button class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={!itemDetails || !packagingCondition}>
-                  ✦ Analyze Return
-                </button>
+                <div class="assessment-actions-row">
+                  <button type="button" class="btn btn-primary btn-assess" on:click={handleAssessReturn} disabled={!itemDetails || !packagingCondition || assessmentLoading}>
+                    ✦ Analyze Return
+                  </button>
+                  <button type="button" class="btn btn-submit btn-create-ticket" on:click={handleSubmit} disabled={!step1Valid || !itemDetails || !packagingCondition || submitting || submitSuccess}>
+                    {#if submitting}<span class="spinner-sm"></span> Creating…{:else}Create Open Ticket{/if}
+                  </button>
+                </div>
+                {#if submitSuccess}
+                  <div class="success-card success-inline">
+                    <div class="success-icon">✓</div>
+                    <div class="success-inline-body">
+                      <h3>Ticket Created Successfully</h3>
+                      <div class="success-id">{createdTicketId}</div>
+                      <p class="success-detail">
+                        Return ticket for <strong>{custName}</strong> has been created.
+                        <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
+                      </p>
+                      <div class="success-actions">
+                        <button type="button" class="btn btn-primary" on:click={goToQueue}>View Returned Items</button>
+                        <button type="button" class="btn btn-secondary" on:click={createAnother}>Create Another</button>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
               {/if}
 
               {#if assessmentError}
@@ -1630,14 +1886,23 @@
   .rtc-status { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
   .rtc-status-open { color: var(--blue); background: var(--blue-dim); }
   .rtc-status-closed { color: var(--green); background: var(--green-dim); }
+  .rtc-status-approved { color: var(--green); background: var(--green-dim); }
+  .rtc-status-denied { color: var(--red); background: var(--red-dim); }
   .rtc-date { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
   .rtc-title { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.35; }
   .rtc-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
   .chip-count { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,0.55); border: 1px solid var(--border); color: var(--text-muted); }
-  .queue-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .queue-summary { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
   .queue-summary-item { padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-surface); display: flex; flex-direction: column; gap: 4px; }
   .queue-summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-family: var(--font-mono); }
   .queue-summary-value { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+  .manual-close-panel { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .manual-close-grid { display: grid; grid-template-columns: 160px 1fr; gap: 12px; margin-top: 10px; }
+  .manual-close-field { display: flex; flex-direction: column; gap: 6px; font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+  .manual-close-field select,
+  .manual-close-field textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-primary); padding: 10px 12px; font: inherit; text-transform: none; letter-spacing: normal; }
+  .manual-close-field textarea { resize: vertical; min-height: 120px; }
+  .manual-close-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 
   /* Sections */
   .form-container { display: flex; flex-direction: column; gap: 16px; }
@@ -1751,7 +2016,12 @@
   /* Assessment */
   .assessment-action { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: 100%; }
   .btn-assess { align-self: flex-start; }
+  .assessment-actions-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn-create-ticket { min-width: 160px; }
   .assessment-success { font-size: 12px; color: var(--green); display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--green-dim); border: 1px solid rgba(76,175,130,0.3); border-radius: var(--radius-sm); }
+  .success-inline { margin-top: 12px; display: flex; align-items: flex-start; gap: 14px; }
+  .success-inline-body { display: flex; flex-direction: column; gap: 6px; }
+  .success-inline h3 { font-family: var(--font-display); font-size: 20px; font-weight: 400; margin: 0; }
   
   /* Agent Loading UI */
   .agent-loading-banner { display: flex; align-items: center; gap: 16px; padding: 16px 20px; background: linear-gradient(90deg, rgba(212,168,67,0.1), rgba(212,168,67,0.02)); border: 1px solid rgba(212,168,67,0.3); border-radius: var(--radius-sm); width: 100%; border-left: 3px solid var(--amber); margin-bottom: 8px; }
@@ -1795,6 +2065,12 @@
     .recent-orders-list { grid-template-columns: 1fr; }
     .item-meta-grid { grid-template-columns: repeat(2, 1fr); }
     .packaging-grid { grid-template-columns: repeat(2, 1fr); }
+    .queue-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .manual-close-grid { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 720px) {
+    .queue-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   
   /* Agent Follow-up Request UI */

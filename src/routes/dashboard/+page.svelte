@@ -1,8 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { analyticsDashboard } from '$lib/stores.js';
-
-  const FASTAPI = 'http://localhost:8000';
+  import { FASTAPI_URL } from '$lib/config.js';
 
   // State for dashboard data
   let loading = true;
@@ -59,7 +58,7 @@
         loading = false;
       }
 
-      const response = await fetch(`${FASTAPI}/api/analytics/dashboard`);
+      const response = await fetch(`${FASTAPI_URL}/api/analytics/dashboard`);
       if (!response.ok) {
         throw new Error(`Analytics request failed with ${response.status}`);
       }

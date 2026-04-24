@@ -14,6 +14,9 @@ mnt/
 .env.*
 !.env.example
 
+.vercel
+.env*.local
+
 # logs
 npm-debug.log*
 yarn-debug.log*

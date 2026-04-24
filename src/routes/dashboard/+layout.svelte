@@ -19,7 +19,6 @@
   $: isCreate    = path.startsWith('/dashboard/create');
   $: isEnquiries = path.startsWith('/dashboard/enquiries');
   $: isInstagramPosts = path.startsWith('/dashboard/instagram-posts');
-  $: isPolicy    = false;
 </script>
 
 {#if $session}
@@ -33,7 +32,7 @@
     </div>
 
     <nav class="nav">
-      <div class="nav-section-label">Queues</div>
+      <div class="nav-section-label">Overview</div>
 
       <a href="/dashboard" class="nav-item" class:active={isAnalytics}>
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
@@ -41,6 +40,8 @@
         </svg>
         Analytics
       </a>
+
+      <div class="nav-section-label" style="margin-top:12px">Support Workflows</div>
 
       <a href="/dashboard/create" class="nav-item" class:active={isCreate}>
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
@@ -65,20 +66,6 @@
           <circle cx="17.5" cy="6.5" r="1"/>
         </svg>
         Instagram Posts Creation
-      </a>
-
-      <a href="/dashboard" class="nav-item disabled">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-        </svg>
-        Analytics
-      </a>
-
-      <a href="/dashboard" class="nav-item disabled">
-        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
-          <path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
-        </svg>
-        Policy Library
       </a>
     </nav>
 

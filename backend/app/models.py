@@ -64,6 +64,19 @@ class EnquiryClassification(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class EnquirySourceOfTruth(BaseModel):
+    source_system: str = Field("Snowflake", alias="sourceSystem")
+    procedure_name: str = Field("", alias="procedureName")
+    procedure_call: str = Field("", alias="procedureCall")
+    row_count: int = Field(0, alias="rowCount")
+    primary_row: dict[str, Any] = Field(default_factory=dict, alias="primaryRow")
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    validation_status: str = Field("validated", alias="validationStatus")
+    validation_notes: list[str] = Field(default_factory=list, alias="validationNotes")
+
+    model_config = {"populate_by_name": True}
+
+
 class EnquiryAnalyzeRequest(BaseModel):
     customer: EnquiryCustomerContext
     channel: Literal["email", "voicemail", "chat"] = "email"
@@ -89,6 +102,7 @@ class EnquiryAnalyzeResponse(BaseModel):
     suggestions: list[EnquirySuggestion] = Field(default_factory=list)
     procedure_notes: list[str] = Field(default_factory=list, alias="procedureNotes")
     ticket_context_note: str = Field("", alias="ticketContextNote")
+    source_of_truth: EnquirySourceOfTruth = Field(default_factory=EnquirySourceOfTruth, alias="sourceOfTruth")
 
     model_config = {"populate_by_name": True}
 

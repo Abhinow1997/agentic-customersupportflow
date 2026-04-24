@@ -58,6 +58,9 @@
   let enquirySenderName   = '';
   let enquirySenderEmail  = '';
   let enquirySenderType   = 'customer'; // 'customer' | 'seller' | 'other'
+  let enquiryAnalysisLoading = false;
+  let enquiryAnalysisError = '';
+  let enquiryAnalysisResult = null;
 
   // ── Voicemail recording state ────────────────────────────────────────────
   let vmRecording        = false;   // currently recording
@@ -253,6 +256,9 @@ Priya`,
     enquirySenderType  = s.senderType;
     enquirySubject     = s.subject;
     enquiryRawMessage  = s.body;
+    enquiryAnalysisLoading = false;
+    enquiryAnalysisError = '';
+    enquiryAnalysisResult = null;
   }
 
   const ENQUIRY_CATEGORIES = [
@@ -418,6 +424,61 @@ Priya`,
     aiSuggestedText  = '';
   }
 
+  async function analyzeEnquirySuggestions() {
+    enquiryAnalysisLoading = true;
+    enquiryAnalysisError = '';
+    try {
+      const response = await fetch(`${FASTAPI_URL}/api/enquiry/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer: {
+            name: custName.trim() || enquirySenderName.trim() || 'Customer',
+            email: custEmail.trim() || lookupEmail.trim() || enquirySenderEmail.trim(),
+            tier: custTier,
+            sk: custSk,
+          },
+          channel: enquiryInputMode,
+          subject: enquirySubject.trim(),
+          body: enquiryRawMessage.trim(),
+          senderName: enquirySenderName.trim(),
+          senderEmail: enquirySenderEmail.trim(),
+          senderType: enquirySenderType,
+          voicemailS3Key: vmS3Key,
+          voicemailDurationSec: vmDuration,
+          emailThreadId: '',
+          ticketRef: `enquiry-${Date.now()}`,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(formatApiError(data, `HTTP ${response.status}`));
+      enquiryAnalysisResult = data;
+    } catch (err) {
+      enquiryAnalysisError = err.message;
+    } finally {
+      enquiryAnalysisLoading = false;
+    }
+  }
+
+  function formatApiError(detail, fallback) {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => item?.msg || item?.message || JSON.stringify(item))
+        .join(', ');
+    }
+    if (detail && typeof detail === 'object') {
+      if (typeof detail.detail === 'string') return detail.detail;
+      if (Array.isArray(detail.detail)) {
+        return detail.detail
+          .map((item) => item?.msg || item?.message || JSON.stringify(item))
+          .join(', ');
+      }
+      if (detail.message) return detail.message;
+    }
+    return fallback;
+  }
+
   // ── Navigation ────────────────────────────────────────────────────────────
   function nextStep() { if (step < 3) step++; }
   function prevStep() { if (step > 1) step--; }
@@ -427,6 +488,7 @@ Priya`,
     packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
+    enquiryAnalysisLoading = false; enquiryAnalysisError = ''; enquiryAnalysisResult = null;
     returnAmt = ''; netLoss = '';
   }
 
@@ -469,6 +531,7 @@ Priya`,
     packagingCondition = ''; returnReasonText = ''; aiSuggestedText = '';
     enquirySubject = ''; enquiryCategory = ''; enquiryInputMode = 'email';
     enquiryRawMessage = ''; enquirySenderName = ''; enquirySenderEmail = ''; enquirySenderType = 'customer';
+    enquiryAnalysisLoading = false; enquiryAnalysisError = ''; enquiryAnalysisResult = null;
     returnAmt = ''; netLoss = ''; returnAmtEdited = false; netLossEdited = false;
     priority = 'medium'; ticketType = 'enquiry';
   }
@@ -664,9 +727,78 @@ Priya`,
 
             <div class="step-actions">
               <div></div>
-              <button class="btn btn-submit enquiry-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
-                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Enquiry Ticket{/if}
+              <button class="btn btn-submit enquiry-submit" disabled={!step1Valid || enquiryAnalysisLoading} on:click={analyzeEnquirySuggestions}>
+                {#if enquiryAnalysisLoading}<span class="spinner-sm"></span> Analysing…{:else}❖ Analyze Enquiry{/if}
               </button>
+            </div>
+
+            <div class="form-section enquiry-ai-section">
+              <div class="section-title-row">
+                <div class="section-title">AI Response Suggestions <span class="field-note">review before loading into the table</span></div>
+                <button class="btn-ai-suggest" on:click={analyzeEnquirySuggestions} disabled={enquiryAnalysisLoading || !enquiryRawMessage.trim()}>
+                  {#if enquiryAnalysisLoading}
+                    <span class="spinner-sm"></span> Analysingâ€¦
+                  {:else}
+                    ✦ Generate Suggestions
+                  {/if}
+                </button>
+              </div>
+
+              {#if enquiryAnalysisError}
+                <div class="error-banner">⚠ {enquiryAnalysisError}</div>
+              {/if}
+
+              {#if enquiryAnalysisResult}
+                <div class="review-grid">
+                  <div class="review-item">
+                    <span class="review-label">Category</span>
+                    <span class="review-val">{enquiryAnalysisResult.classification?.category}</span>
+                  </div>
+                  <div class="review-item">
+                    <span class="review-label">Subcategory</span>
+                    <span class="review-val">{enquiryAnalysisResult.classification?.subcategory}</span>
+                  </div>
+                  <div class="review-item">
+                    <span class="review-label">Priority</span>
+                    <span class="review-val">{enquiryAnalysisResult.classification?.priority}</span>
+                  </div>
+                  <div class="review-item">
+                    <span class="review-label">Confidence</span>
+                    <span class="review-val">{(enquiryAnalysisResult.classification?.confidence ?? 0).toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <div class="review-complaint">
+                  <span class="review-label">Draft subject</span>
+                  <textarea bind:value={enquiryAnalysisResult.draftSubject} rows="2" class="message-body-area"></textarea>
+                </div>
+
+                <div class="review-complaint">
+                  <span class="review-label">Draft response</span>
+                  <textarea bind:value={enquiryAnalysisResult.draftResponse} rows="8" class="message-body-area"></textarea>
+                </div>
+
+                <div class="review-complaint">
+                  <span class="review-label">Internal summary</span>
+                  <textarea bind:value={enquiryAnalysisResult.aiSummary} rows="3" class="message-body-area"></textarea>
+                </div>
+
+                {#if enquiryAnalysisResult.suggestions?.length}
+                  <div class="suggestion-grid">
+                    {#each enquiryAnalysisResult.suggestions as suggestion}
+                      <div class="suggestion-card">
+                        <div class="suggestion-head">
+                          <label class="checkbox-row">
+                            <input type="checkbox" bind:checked={suggestion.selected} />
+                            <span>{suggestion.label}</span>
+                          </label>
+                        </div>
+                        <textarea bind:value={suggestion.text} rows="4" class="message-body-area"></textarea>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
             </div>
 
           {:else}
@@ -1200,6 +1332,12 @@ Priya`,
   .btn-ai-suggest { display: flex; align-items: center; gap: 6px; padding: 7px 14px; background: var(--blue-dim); border: 1px solid rgba(91,140,240,0.35); border-radius: var(--radius-sm); color: var(--blue); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
   .btn-ai-suggest:hover:not(:disabled) { background: rgba(91,140,240,0.2); }
   .btn-ai-suggest:disabled { opacity: 0.5; cursor: not-allowed; }
+  .enquiry-ai-section { border-color: rgba(91,140,240,0.22); background: linear-gradient(180deg, rgba(15,18,28,0.98), rgba(15,18,28,0.92)); }
+  .suggestion-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 12px; }
+  .suggestion-card { padding: 12px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+  .suggestion-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+  .checkbox-row input { width: auto; }
 
   /* Enquiry categories */
   .enquiry-cat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }

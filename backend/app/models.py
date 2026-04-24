@@ -28,6 +28,99 @@ class ItemContext(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+# â”€â”€ Enquiry analysis / create â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+class EnquiryCustomerContext(BaseModel):
+    name: str = ""
+    email: str
+    tier: str = "Bronze"
+    sk: int | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquirySuggestion(BaseModel):
+    id: str
+    label: str
+    text: str
+    selected: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquiryClassification(BaseModel):
+    category: str
+    subcategory: str
+    confidence: float = 0.0
+    sentiment_label: str = Field("Neutral", alias="sentimentLabel")
+    sentiment_score: float = Field(0.0, alias="sentimentScore")
+    urgency_score: int = Field(1, alias="urgencyScore")
+    priority: str = "Medium"
+    procedure_name: str = Field("", alias="procedureName")
+    open_ticket_status: str = Field("", alias="openTicketStatus")
+    open_ticket_count: int = Field(0, alias="openTicketCount")
+    validation_questions: list[str] = Field(default_factory=list, alias="validationQuestions")
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquiryAnalyzeRequest(BaseModel):
+    customer: EnquiryCustomerContext
+    channel: Literal["email", "voicemail", "chat"] = "email"
+    subject: str = ""
+    body: str
+    sender_name: str = Field("", alias="senderName")
+    sender_email: str = Field("", alias="senderEmail")
+    sender_type: str = Field("customer", alias="senderType")
+    voicemail_s3_key: str = Field("", alias="voicemailS3Key")
+    voicemail_duration_sec: float = Field(0.0, alias="voicemailDurationSec")
+    email_thread_id: str = Field("", alias="emailThreadId")
+    ticket_ref: str = Field("", alias="ticketRef")
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquiryAnalyzeResponse(BaseModel):
+    analysis_id: str = Field(..., alias="analysisId")
+    classification: EnquiryClassification
+    draft_subject: str = Field("", alias="draftSubject")
+    draft_response: str = Field("", alias="draftResponse")
+    ai_summary: str = Field("", alias="aiSummary")
+    suggestions: list[EnquirySuggestion] = Field(default_factory=list)
+    procedure_notes: list[str] = Field(default_factory=list, alias="procedureNotes")
+    ticket_context_note: str = Field("", alias="ticketContextNote")
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquiryCreateRequest(BaseModel):
+    customer: EnquiryCustomerContext
+    channel: Literal["email", "voicemail", "chat"] = "email"
+    subject: str
+    body: str
+    classification: EnquiryClassification
+    draft_subject: str = Field("", alias="draftSubject")
+    draft_response: str = Field("", alias="draftResponse")
+    ai_summary: str = Field("", alias="aiSummary")
+    suggestions: list[EnquirySuggestion] = Field(default_factory=list)
+    voicemail_s3_key: str = Field("", alias="voicemailS3Key")
+    voicemail_duration_sec: float = Field(0.0, alias="voicemailDurationSec")
+    email_thread_id: str = Field("", alias="emailThreadId")
+    assigned_to: str = Field("", alias="assignedTo")
+    status: str = "Open"
+
+    model_config = {"populate_by_name": True}
+
+
+class EnquiryCreateResponse(BaseModel):
+    ok: bool
+    ticket_id: str = Field(..., alias="ticketId")
+    ticket_number: str = Field(..., alias="ticketNumber")
+    message: str
+
+    model_config = {"populate_by_name": True}
+
+
 class AnalyzeTicketRequest(BaseModel):
     ticket_id: str
     return_reason: str = Field(..., alias="returnReason")

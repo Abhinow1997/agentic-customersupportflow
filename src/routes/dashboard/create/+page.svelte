@@ -1,11 +1,15 @@
 <script>
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { tickets, ticketsLoading, ticketsError, loadTickets, selectedTicketId } from '$lib/stores.js';
 
   const FASTAPI = 'http://localhost:8000';
 
   // ── Ticket type ──────────────────────────────────────────────────────────
-  let ticketType = 'return'; // 'return' | 'enquiry'
+  let ticketType = 'return';
+  let returnSearch = '';
+  let returnDateFilter = 'all'; // 'all' | '7' | '30'
+  let workspaceView = 'create'; // 'queue' | 'create'
+  let selectedTicket = null; // Store full ticket object for detail view
 
   // ── Step / submit state ──────────────────────────────────────────────────
   let step = 1;
@@ -40,8 +44,106 @@
   let dateFilter = 'all'; // 'all' | '7'
 
   onMount(() => {
+    if ($tickets.length === 0) {
+      loadTickets();
+    }
     fetchRecentOrders(false);
   });
+
+  function setWorkspaceView(view) {
+    workspaceView = view;
+    if (view === 'queue') {
+      returnDateFilter = 'all';
+      returnSearch = '';
+      selectedTicket = null;
+      if ($tickets.length === 0) {
+        loadTickets();
+      }
+    }
+  }
+
+  const normalizeStatus = (value) => (value ?? 'Open').toString().trim().toLowerCase();
+  const statusLabel = (value) => {
+    const normalized = normalizeStatus(value);
+    if (normalized === 'open') return 'Open';
+    if (normalized === 'closed') return 'Closed';
+    if (!normalized) return 'Open';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  };
+
+  $: returnTicketsQueued = $tickets.length > 0;
+  
+  $: filteredReturnTickets = $tickets.filter(t => {
+    // Date filter
+    if (returnDateFilter !== 'all') {
+      const days = parseInt(returnDateFilter);
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      
+      const dateStr = t.created;
+      if (dateStr) {
+        let ticketDate;
+        // Handle YYYYMMDD format
+        if (/^\d{8}$/.test(String(dateStr).trim())) {
+          const s = String(dateStr).trim();
+          ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+        } else {
+          ticketDate = new Date(dateStr);
+        }
+        if (!isNaN(ticketDate.getTime()) && ticketDate < cutoff) {
+          return false;
+        }
+      }
+    }
+    
+    // Search filter
+    if (returnSearch.trim()) {
+      const q = returnSearch.trim().toLowerCase();
+      const amt = String(t.returnAmt ?? '').toLowerCase();
+      const loss = String(t.netLoss ?? '').toLowerCase();
+      const reason = (t.returnReason ?? t.resolution ?? '').toLowerCase();
+      if (
+        !t.id?.toLowerCase().includes(q) &&
+        !String(t.status ?? '').toLowerCase().includes(q) &&
+        !reason.includes(q) &&
+        !amt.includes(q) &&
+        !loss.includes(q)
+      ) return false;
+    }
+    return true;
+  });
+  
+  $: dateFilterCounts = {
+    'all': $tickets.length,
+    '7': $tickets.filter(t => {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      const dateStr = t.created;
+      if (!dateStr) return false;
+      let ticketDate;
+      if (/^\d{8}$/.test(String(dateStr).trim())) {
+        const s = String(dateStr).trim();
+        ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+      } else {
+        ticketDate = new Date(dateStr);
+      }
+      return !isNaN(ticketDate.getTime()) && ticketDate >= cutoff;
+    }).length,
+    '30': $tickets.filter(t => {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const dateStr = t.created;
+      if (!dateStr) return false;
+      let ticketDate;
+      if (/^\d{8}$/.test(String(dateStr).trim())) {
+        const s = String(dateStr).trim();
+        ticketDate = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
+      } else {
+        ticketDate = new Date(dateStr);
+      }
+      return !isNaN(ticketDate.getTime()) && ticketDate >= cutoff;
+    }).length,
+  };
 
   async function fetchRecentOrders(forceRefresh = false) {
     if (!forceRefresh) {
@@ -121,6 +223,15 @@
     }
     
     // Removed auto-navigation to step 2 so the agent can review before proceeding manually
+  }
+
+  function selectReturnTicket(ticket) {
+    selectedTicket = ticket;
+    selectedTicketId.set(ticket.id);
+  }
+
+  function setReturnSearch(event) {
+    returnSearch = event.target.value;
   }
 
   // ── Package assessment ────────────────────────────────────────────────────
@@ -300,12 +411,11 @@
   ];
 
   // ── Step labels ───────────────────────────────────────────────────────────
-  $: stepLabels = ticketType === 'enquiry'
-    ? [{ n: 1, label: 'Enquiry Details' }]
-    : [
-        { n: 1, label: 'Customer Lookup' },
-        { n: 2, label: 'Assessment & Decision' },
-      ];
+  $: stepLabels = [
+    { n: 1, label: 'Customer Lookup' },
+    { n: 2, label: 'Assessment & Decision' },
+    { n: 3, label: 'Submit Ticket' },
+  ];
 
   // ── Derived ───────────────────────────────────────────────────────────────
   $: packagingMeta     = PACKAGING_CONDITIONS.find(p => p.id === packagingCondition);
@@ -321,9 +431,7 @@
     netLoss = (parseFloat(returnAmt) * packagingFactor).toFixed(2);
   }
 
-  $: step1Valid = ticketType === 'enquiry'
-    ? (enquiryRawMessage.trim())
-    : (lookupStatus !== '' && custName.trim());
+  $: step1Valid = lookupStatus !== '' && custName.trim();
     
   // Step 2 is valid once decision is logged
   $: step2Valid = decisionLogged;
@@ -616,7 +724,15 @@
     finally { submitting = false; }
   }
 
-  function goToQueue()    { goto('/dashboard'); }
+  function goToQueue()    {
+    submitSuccess = false;
+    workspaceView = 'queue';
+    returnTab = 'All';
+    returnSearch = '';
+    if ($tickets.length === 0) {
+      loadTickets();
+    }
+  }
   function createAnother() {
     step = 1; submitSuccess = false; createdTicketId = '';
     lookupEmail = ''; lookupStatus = ''; custName = ''; custEmail = '';
@@ -632,8 +748,23 @@
   // ── Helpers ───────────────────────────────────────────────────────────────
   function truncate(str, n) { return str && str.length > n ? str.slice(0, n) + '…' : (str ?? ''); }
   
+  function formatCurrency(val) {
+    if (val == null || isNaN(val)) return '$0.00';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+  }
+  
   function formatDateStr(dStr) {
     if (!dStr) return '—';
+    const raw = String(dStr).trim();
+    if (/^\d{8}$/.test(raw)) {
+      const yyyy = raw.slice(0, 4);
+      const mm = raw.slice(4, 6);
+      const dd = raw.slice(6, 8);
+      const parsed = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+    }
     const d = new Date(dStr);
     if (isNaN(d.getTime())) return dStr;
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -643,11 +774,11 @@
 <div class="create-page">
   <header class="topbar">
     <div class="topbar-left">
-      <h2>Create Ticket</h2>
-      <div class="breadcrumb">New Ticket · Manual Entry · {ticketType === 'return' ? 'Item Return' : 'Customer Enquiry'}</div>
+      <h2>Item Return</h2>
+      <div class="breadcrumb">Return Workspace · Ticket Queue · Item Library</div>
     </div>
     <div class="topbar-right">
-      <a href="/dashboard" class="back-link">← Back to Queue</a>
+      <a href="/dashboard" class="back-link">← Back to Dashboard</a>
     </div>
   </header>
 
@@ -659,164 +790,209 @@
         <h3>Ticket Created Successfully</h3>
         <div class="success-id">{createdTicketId}</div>
         <p class="success-detail">
-          {ticketType === 'return' ? 'Return ticket' : 'Enquiry ticket'} for <strong>{custName}</strong> has been created.
-          {#if ticketType === 'return'}<br/>{:else}<br/>Subject: <strong>{enquirySubject}</strong>{/if}
+          Return ticket for <strong>{custName}</strong> has been created.
           <br/>Priority: <span class="priority-tag priority-{priority}">{priority}</span>
         </p>
         <div class="success-actions">
-          <button class="btn btn-primary" on:click={goToQueue}>View in Queue</button>
-          <button class="btn btn-secondary" on:click={createAnother}>Create Another</button>
+        <button type="button" class="btn btn-primary" on:click={goToQueue}>View Returned Items</button>
+        <button type="button" class="btn btn-secondary" on:click={createAnother}>Create Another</button>
         </div>
       </div>
+    {/if}
 
-    {:else}
-
-      <div class="type-selector">
-        <button class="type-btn" class:active={ticketType === 'return'} on:click={() => setTicketType('return')}>
-          <span class="type-icon">↩</span>
-          <span class="type-label">Item Return</span>
-          <span class="type-desc">Customer returning a purchased item</span>
+      <div class="view-switcher">
+        <button type="button" class="view-card" class:active={workspaceView === 'create'} on:click={() => setWorkspaceView('create')}>
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
+            <path d="M12 4v16m8-8H4"/>
+          </svg>
+          <div class="view-card-body">
+            <div class="view-card-label">Create Ticket</div>
+            <div class="view-card-desc">Process a new customer return request</div>
+          </div>
         </button>
-        <button class="type-btn" class:active={ticketType === 'enquiry'} on:click={() => setTicketType('enquiry')}>
-          <span class="type-icon">💬</span>
-          <span class="type-label">Enquiry</span>
-          <span class="type-desc">Question, request or general support</span>
+        <button type="button" class="view-card" class:active={workspaceView === 'queue'} on:click={() => setWorkspaceView('queue')}>
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" class="view-card-icon">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+          </svg>
+          <div class="view-card-body">
+            <div class="view-card-label">
+              Returned Items
+              <span class="view-card-count">{$tickets.length}</span>
+            </div>
+            <div class="view-card-desc">Review and manage existing return tickets</div>
+          </div>
         </button>
       </div>
 
-      <div class="step-bar">
-        {#each stepLabels as s}
-          <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
-            on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; }}>
-            <span class="step-num">{step > s.n ? '✓' : s.n}</span>
-            <span class="step-label">{s.label}</span>
-          </button>
-        {/each}
-      </div>
+      {#if workspaceView === 'queue'}
+        <div class="workspace-panel return-panel">
+          <div class="section-title-row">
+              <div class="section-title" style="margin: 0;">Returned Items Listing <span class="section-sub">queue and review</span></div>
+            <button type="button" class="btn btn-ghost btn-sm" on:click={() => loadTickets(true)} disabled={$ticketsLoading}>
+              {#if $ticketsLoading}<span class="spinner-sm"></span>{:else}↻ Refresh{/if}
+            </button>
+          </div>
 
-      <div class="form-container">
-
-        {#if step === 1}
-
-          {#if ticketType === 'enquiry'}
-            <div class="form-section">
-              <div class="section-title">Input Mode</div>
-              <div class="input-mode-tabs">
-                <button class="mode-tab" class:active={enquiryInputMode === 'email'} on:click={() => enquiryInputMode = 'email'}>
-                  <span class="mode-tab-icon">✉</span>
-                  <div class="mode-tab-body">
-                    <span class="mode-tab-label">Email / Text Message</span>
-                    <span class="mode-tab-desc">Paste or type the customer's email, live chat or any written message</span>
-                  </div>
-                </button>
-                <button class="mode-tab" class:active={enquiryInputMode === 'voicemail'} on:click={() => enquiryInputMode = 'voicemail'}>
-                  <span class="mode-tab-icon">🎙</span>
-                  <div class="mode-tab-body">
-                    <span class="mode-tab-label">Voicemail</span>
-                    <span class="mode-tab-desc">Record a voicemail, upload to S3, and auto-transcribe with Whisper</span>
-                  </div>
-                </button>
+          {#if $ticketsLoading && $tickets.length === 0}
+            <div class="loading-state" style="margin-top: 20px; text-align: center; padding: 40px;">
+              <span class="spinner-sm"></span>
+              <div style="margin-top: 12px; color: var(--text-muted);">Loading tickets...</div>
+            </div>
+          {:else}
+            <div class="queue-summary">
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Total</span>
+                <span class="queue-summary-value">{$tickets.length}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Showing</span>
+                <span class="queue-summary-value">{filteredReturnTickets.length}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Last 7 Days</span>
+                <span class="queue-summary-value">{dateFilterCounts['7']}</span>
+              </div>
+              <div class="queue-summary-item">
+                <span class="queue-summary-label">Last 30 Days</span>
+                <span class="queue-summary-value">{dateFilterCounts['30']}</span>
               </div>
             </div>
 
-            <div class="form-section">
-              <div class="section-title">Load a Demo Sample <span class="section-sub">— click any to populate the form</span></div>
-              <div class="sample-grid">
-                {#each DEMO_SAMPLES as s}
-                  <button class="sample-card" class:seller={s.senderType === 'seller'} on:click={() => applySample(s)}>
-                    <div class="sample-card-top">
-                      <span class="sample-type-badge sample-type-{s.senderType}">{s.senderType}</span>
-                      <span class="sample-label">{s.label}</span>
-                    </div>
-                    <span class="sample-from">{s.senderName}</span>
-                  </button>
-                {/each}
+            <div class="lookup-row" style="margin-top: 12px;">
+              <div class="lookup-input-wrap">
+                <input
+                  type="text"
+                  value={returnSearch}
+                  on:input={setReturnSearch}
+                  placeholder="Search ticket, status, reason, or amount…"
+                />
               </div>
             </div>
 
-            {#if enquiryInputMode === 'voicemail'}
-              <div class="form-section vm-section">
-                <div class="section-title">Voicemail Recorder</div>
-
-                {#if !vmRecording && !vmAudioBlob}
-                  <div class="vm-idle">
-                    <button class="vm-record-btn" on:click={startRecording}>
-                      <span class="vm-mic-icon">🎙</span>
-                      <span>Start Recording</span>
-                    </button>
-                    <p class="vm-hint">Click to start recording. The audio will be saved to S3 and transcribed via OpenAI Whisper.</p>
-                  </div>
-                {/if}
-
-                {#if vmRecording}
-                  <div class="vm-recording">
-                    <div class="vm-pulse-ring">
-                      <div class="vm-pulse-dot"></div>
-                    </div>
-                    <div class="vm-recording-info">
-                      <span class="vm-rec-label">REC</span>
-                      <span class="vm-timer">{vmFormatDuration(vmDuration)}</span>
-                    </div>
-                    <button class="vm-stop-btn" on:click={stopRecording}>⏹ Stop Recording</button>
-                  </div>
-                {/if}
-
-                {#if vmAudioBlob && !vmRecording}
-                  <div class="vm-preview">
-                    <div class="vm-preview-header">
-                      <span class="vm-preview-label">✔ Recording captured</span>
-                      <span class="vm-preview-duration">{vmFormatDuration(vmDuration)}</span>
-                    </div>
-                    <audio src={vmAudioUrl} controls class="vm-audio-player"></audio>
-                    <div class="vm-actions">
-                      {#if enquiryRawMessage}
-                        <div class="vm-transcribed-badge">✦ Transcribed</div>
-                      {:else}
-                        <button class="btn vm-transcribe-btn" disabled={vmTranscribing} on:click={transcribeRecording}>
-                          {#if vmTranscribing}
-                            <span class="spinner-sm"></span> Transcribing…
-                          {:else}
-                            ✦ Transcribe with Whisper
-                          {/if}
-                        </button>
-                      {/if}
-                      <button class="btn btn-ghost btn-sm" on:click={discardRecording}>Discard</button>
-                    </div>
-                    {#if vmS3Key}
-                      <div class="vm-s3-badge">
-                        <span class="vm-s3-icon">☁</span>
-                        <span>Saved to S3 — <code>{vmS3Key}</code></span>
-                      </div>
-                    {/if}
-                    {#if vmTranscriptError}
-                      <div class="vm-error">⚠ {vmTranscriptError}</div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-
-              {#if enquiryRawMessage}
-                <div class="form-section">
-                  <div class="section-title-row">
-                    <div class="section-title">Transcript <span class="field-note">auto-generated — review and edit</span></div>
-                    <span class="char-count-badge">{enquiryRawMessage.length} chars</span>
-                  </div>
-                  <textarea bind:value={enquiryRawMessage} rows="8" class="message-body-area"
-                    placeholder="Transcript will appear here after Whisper processes the recording..."></textarea>
-                </div>
-              {/if}
-            {/if}
-
-            {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
-
-            <div class="step-actions">
-              <div></div>
-              <button class="btn btn-submit enquiry-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
-                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Enquiry Ticket{/if}
+            <div class="chip-group" style="margin-top: 10px;">
+              <button type="button" class="chip" class:selected={returnDateFilter === 'all'} on:click={() => returnDateFilter = 'all'}>
+                All Dates
+                <span class="chip-count">{dateFilterCounts['all']}</span>
+              </button>
+              <button type="button" class="chip" class:selected={returnDateFilter === '7'} on:click={() => returnDateFilter = '7'}>
+                Last 7 Days
+                <span class="chip-count">{dateFilterCounts['7']}</span>
+              </button>
+              <button type="button" class="chip" class:selected={returnDateFilter === '30'} on:click={() => returnDateFilter = '30'}>
+                Last 30 Days
+                <span class="chip-count">{dateFilterCounts['30']}</span>
               </button>
             </div>
 
-          {:else}
+            {#if $ticketsError}
+              <div class="error-banner" style="margin-top: 12px;">⚠ {$ticketsError}</div>
+            {/if}
+
+            {#if !returnTicketsQueued}
+              <div class="empty-state" style="margin-top: 14px;">No tickets loaded. Click Refresh to load tickets from Snowflake.</div>
+            {:else if filteredReturnTickets.length > 0}
+              <div class="queue-content-grid">
+                <div class="return-ticket-list">
+                  {#each filteredReturnTickets as t (t.id)}
+                    <button type="button" class="return-ticket-card" class:selected={selectedTicket?.id === t.id} on:click={() => selectReturnTicket(t)}>
+                      <div class="rtc-top">
+                        <span class="rtc-id">{t.id}</span>
+                        <span class="rtc-status rtc-status-{normalizeStatus(t.status)}">{statusLabel(t.status)}</span>
+                        <span class="rtc-date">{formatDateStr(t.created)}</span>
+                      </div>
+                      <div class="rtc-title">{truncate(t.returnReason ?? t.resolution ?? t.subject ?? t.id, 54)}</div>
+                      <div class="rtc-meta">
+                        <span>Amt {formatCurrency(t.returnAmt ?? 0)}</span>
+                        <span>Loss {formatCurrency(t.netLoss ?? 0)}</span>
+                        <span>Qty {t.item?.returnQty ?? 1}</span>
+                      </div>
+                    </button>
+                  {/each}
+                </div>
+
+                {#if selectedTicket}
+                  <div class="ticket-detail-panel">
+                    <div class="ticket-detail-header">
+                      <h3>Ticket Details</h3>
+                      <button type="button" class="btn btn-ghost btn-sm" on:click={() => selectedTicket = null}>✕ Close</button>
+                    </div>
+                    
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Ticket ID</div>
+                      <div class="detail-value">{selectedTicket.id}</div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Status</div>
+                      <div class="detail-value">
+                        <span class="rtc-status rtc-status-{normalizeStatus(selectedTicket.status)}">{statusLabel(selectedTicket.status)}</span>
+                      </div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Created Date</div>
+                      <div class="detail-value">{formatDateStr(selectedTicket.created)}</div>
+                    </div>
+
+                    <div class="ticket-detail-section">
+                      <div class="detail-label">Return Reason</div>
+                      <div class="detail-value">{selectedTicket.returnReason ?? selectedTicket.resolution ?? selectedTicket.subject ?? '—'}</div>
+                    </div>
+
+                    <div class="ticket-detail-grid">
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Return Amount</div>
+                        <div class="detail-value detail-value-amount">{formatCurrency(selectedTicket.returnAmt ?? 0)}</div>
+                      </div>
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Net Loss</div>
+                        <div class="detail-value detail-value-loss">{formatCurrency(selectedTicket.netLoss ?? 0)}</div>
+                      </div>
+                    </div>
+
+                    <div class="ticket-detail-grid">
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Quantity</div>
+                        <div class="detail-value">{selectedTicket.item?.returnQty ?? 1}</div>
+                      </div>
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Customer SK</div>
+                        <div class="detail-value">{selectedTicket.customer?.sk ?? '—'}</div>
+                      </div>
+                    </div>
+
+                    {#if selectedTicket.item}
+                      <div class="ticket-detail-section">
+                        <div class="detail-label">Item Details</div>
+                        <div class="detail-value">
+                          <div>{selectedTicket.item.name ?? '—'}</div>
+                          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                            SK: {selectedTicket.item.sk ?? '—'}
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div class="empty-state" style="margin-top: 14px;">No return records match the current filter.</div>
+            {/if}
+          {/if}
+        </div>
+      {:else}
+        <div class="workspace-panel workflow-panel">
+          <div class="step-bar">
+            {#each stepLabels as s}
+              <button class="step-pill" class:active={step === s.n} class:done={step > s.n}
+                on:click={() => { if (s.n < step) step = s.n; else if (s.n === 2 && step1Valid) step = 2; }}>
+                <span class="step-num">{step > s.n ? '✓' : s.n}</span>
+                <span class="step-label">{s.label}</span>
+              </button>
+            {/each}
+          </div>
+
+        {#if step === 1}
             <!-- RETURN PATH -->
             <div class="form-section">
               <div class="section-title">Customer Lookup</div>
@@ -869,10 +1045,10 @@
               <button class="btn btn-primary" disabled={!step1Valid} on:click={nextStep}>Next: Item & Assessment →</button>
             </div>
 
-            <!-- Recent Orders Integration -->
+            <!-- Item listing -->
             <div class="form-section">
               <div class="section-title-row">
-                <div class="section-title" style="margin: 0;">Recent Orders <span class="section-sub">— click to auto-fill ticket details</span></div>
+                <div class="section-title" style="margin: 0;">Items <span class="section-sub">— click to auto-fill ticket details</span></div>
                 
                 <div class="recent-orders-controls">
                   <div class="chip-group">
@@ -924,8 +1100,14 @@
               {/if}
             </div>
 
-          {/if}
+            {#if submitError}<div class="error-banner">⚠ {submitError}</div>{/if}
 
+            <div class="step-actions">
+              <div></div>
+              <button class="btn btn-submit" disabled={!step1Valid || submitting} on:click={handleSubmit}>
+                {#if submitting}<span class="spinner-sm"></span> Creating…{:else}❖ Create Return Ticket{/if}
+              </button>
+            </div>
 
         {:else if step === 2 && ticketType === 'return'}
 
@@ -1364,28 +1546,19 @@
               </div>
             {/if}
           
+           <div class="step-actions">
+             <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
+             {#if !decisionLogged}
+               <div class="step-hint">Complete the assessment and make a decision to proceed</div>
+             {/if}
+           </div>
+
           </div>
-          <div class="step-actions">
-            <button class="btn btn-ghost" on:click={prevStep}>← Back</button>
-            {#if !decisionLogged}
-              <div class="step-hint">Complete the assessment and make a decision to proceed</div>
-            {/if}
-          </div>
-
-
-        {:else if step === 2 && ticketType === 'enquiry'}
-
-          <div class="form-section">
-            <div class="section-title">Enquiry form placeholder</div>
-            <p style="color: var(--text-muted);">Enquiry handling not yet implemented for step 2.</p>
-          </div>
-
         {/if}
-
       </div>
     {/if}
   </div>
-</div>
+  </div>
 
 <style>
   .create-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -1396,10 +1569,10 @@
   .back-link { font-size: 13px; color: var(--text-muted); font-family: var(--font-mono); transition: color 0.15s; }
   .back-link:hover { color: var(--amber); }
 
-  .page-body { flex: 1; overflow-y: auto; padding: 28px 32px; max-width: 900px; margin: 0 auto; width: 100%; }
+  .page-body { flex: 1; overflow-y: auto; padding: 36px 24px; max-width: none; width: 100%; }
 
   /* Type selector */
-  .type-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .type-selector { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-bottom: 24px; max-width: 600px; }
   .type-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 16px 18px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; text-align: left; }
   .type-btn:hover { border-color: rgba(212,168,67,0.3); }
   .type-btn.active { border-color: rgba(212,168,67,0.5); background: var(--amber-glow); }
@@ -1408,8 +1581,22 @@
   .type-btn.active .type-label { color: var(--amber); }
   .type-desc { font-size: 11.5px; color: var(--text-muted); }
 
+  /* View switcher */
+  .view-switcher { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .view-card { display: flex; align-items: center; gap: 14px; padding: 18px 20px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: all 0.15s; text-align: left; }
+  .view-card:hover:not(.active) { border-color: rgba(212,168,67,0.3); }
+  .view-card.active { border-color: rgba(212,168,67,0.5); background: var(--amber-glow); }
+  .view-card-icon { flex-shrink: 0; color: var(--text-muted); }
+  .view-card.active .view-card-icon { color: var(--amber); }
+  .view-card-body { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .view-card-label { font-size: 14px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+  .view-card.active .view-card-label { color: var(--amber); }
+  .view-card-desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+  .view-card-count { font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); color: var(--text-muted); }
+  .view-card.active .view-card-count { background: rgba(212,168,67,0.2); border-color: rgba(212,168,67,0.4); color: var(--amber); }
+
   /* Step bar */
-  .step-bar { display: flex; gap: 8px; margin-bottom: 20px; }
+  .step-bar { display: flex; gap: 10px; margin-bottom: 24px; }
   .step-pill { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 24px; color: var(--text-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s; flex: 1; justify-content: center; }
   .step-pill.active { background: var(--amber-glow); border-color: rgba(212,168,67,0.4); color: var(--amber); }
   .step-pill.done  { background: var(--green-dim); border-color: rgba(76,175,130,0.3); color: var(--green); }
@@ -1418,9 +1605,43 @@
   .step-pill.done  .step-num  { background: var(--green); color: #0c0e14; border-color: var(--green); }
   .step-label { white-space: nowrap; }
 
+  .workspace-grid { display: grid; grid-template-columns: minmax(340px, 400px) minmax(0, 1fr); gap: 24px; margin-bottom: 18px; align-items: start; }
+  .workspace-panel { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-surface); padding: 20px; }
+  .workflow-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .return-ticket-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .return-ticket-card { text-align: left; padding: 14px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 6px; }
+  .return-ticket-card:hover { border-color: rgba(212,168,67,0.4); background: var(--amber-glow); transform: translateY(-1px); }
+  .return-ticket-card.selected { border-color: var(--amber); background: var(--amber-glow); }
+  
+  .queue-content-grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 14px; }
+  .queue-content-grid:has(.ticket-detail-panel) { grid-template-columns: 1fr 400px; }
+  
+  .ticket-detail-panel { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; display: flex; flex-direction: column; gap: 16px; max-height: 600px; overflow-y: auto; }
+  .ticket-detail-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  .ticket-detail-header h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0; }
+  .ticket-detail-section { display: flex; flex-direction: column; gap: 6px; }
+  .ticket-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .detail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-family: var(--font-mono); font-weight: 600; }
+  .detail-value { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
+  .detail-value-amount { font-size: 18px; font-weight: 700; color: var(--green); font-family: var(--font-mono); }
+  .detail-value-loss { font-size: 18px; font-weight: 700; color: var(--red); font-family: var(--font-mono); }
+  .rtc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rtc-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-right: auto; }
+  .rtc-status { font-family: var(--font-mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
+  .rtc-status-open { color: var(--blue); background: var(--blue-dim); }
+  .rtc-status-closed { color: var(--green); background: var(--green-dim); }
+  .rtc-date { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+  .rtc-title { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.35; }
+  .rtc-meta { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+  .chip-count { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,0.55); border: 1px solid var(--border); color: var(--text-muted); }
+  .queue-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+  .queue-summary-item { padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-surface); display: flex; flex-direction: column; gap: 4px; }
+  .queue-summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); font-family: var(--font-mono); }
+  .queue-summary-value { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+
   /* Sections */
   .form-container { display: flex; flex-direction: column; gap: 16px; }
-  .form-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 20px; }
+  .form-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 24px; }
   .form-section.section-locked { opacity: 0.5; pointer-events: none; }
   .form-section.section-hidden { display: none; }
   .form-section.section-visible { display: block; }
@@ -1568,6 +1789,13 @@
   .coverage-pill { font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 7px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
   .coverage-pill.ok { color: var(--green); background: var(--green-dim); border-color: rgba(76,175,130,0.35); }
   .coverage-pill.warn { color: var(--amber); background: var(--amber-glow); border-color: rgba(212,168,67,0.35); }
+
+  @media (max-width: 1180px) {
+    .return-ticket-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+    .recent-orders-list { grid-template-columns: 1fr; }
+    .item-meta-grid { grid-template-columns: repeat(2, 1fr); }
+    .packaging-grid { grid-template-columns: repeat(2, 1fr); }
+  }
   
   /* Agent Follow-up Request UI */
   .agent-request-panel { margin-top: 20px; padding: 18px; border: 1px dashed rgba(212,168,67,0.5); border-radius: var(--radius-md); background: linear-gradient(180deg, rgba(212,168,67,0.08), rgba(212,168,67,0.02)); position: relative; }

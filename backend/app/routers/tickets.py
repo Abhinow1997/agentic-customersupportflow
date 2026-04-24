@@ -40,68 +40,14 @@ async def list_tickets(
         rows = run_query(
             f"""
             SELECT
-                sr.SR_TICKET_NUMBER,
-                sr.SR_RETURN_AMT,
-                sr.SR_FEE,
-                sr.SR_NET_LOSS,
-                sr.SR_RETURN_QUANTITY,
-                r.R_REASON_SK,
-                r.R_REASON_ID,
-                r.R_REASON_DESC,
-                i.I_ITEM_SK,
-                i.I_PRODUCT_NAME,
-                i.I_CATEGORY,
-                i.I_CATEGORY_FULL,
-                i.I_CLASS,
-                i.I_BRAND,
-                i.I_CURRENT_PRICE,
-                i.I_LIST_PRICE,
-                i.I_ITEM_DESC,
-                i.I_PRODUCT_URL,
-                c.C_CUSTOMER_SK,
-                c.C_FIRST_NAME,
-                c.C_LAST_NAME,
-                c.C_EMAIL_ADDRESS,
-                c.C_PREFERRED_CUST_FLAG,
-                d.D_DATE,
-                COALESCE(sr.SR_STATUS, 'Open')   AS SR_STATUS,
-                COALESCE(sr.SR_RESOLUTION, '')   AS SR_RESOLUTION,
-                COALESCE(rc.RETURN_COUNT, 0)     AS CUSTOMER_ORDER_COUNT
+                sr.*
             FROM SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS sr
-                LEFT JOIN SYNTHETIC_COMPANYDB.COMPANY.REASON r
-                    ON r.R_REASON_SK = sr.SR_REASON_SK
-                LEFT JOIN (
-                    SELECT *,
-                           ROW_NUMBER() OVER (ORDER BY I_ITEM_SK) AS I_RN
-                    FROM SYNTHETIC_COMPANYDB.COMPANY.ITEM
-                    WHERE I_AVAILABLE = TRUE
-                ) i ON i.I_RN = sr.SR_ITEM_SK
-                LEFT JOIN SYNTHETIC_COMPANYDB.COMPANY.CUSTOMER c
-                    ON c.C_CUSTOMER_SK = sr.SR_CUSTOMER_SK
-                LEFT JOIN SYNTHETIC_COMPANYDB.COMPANY.DATE_DIM d
-                    ON d.D_DATE_SK = sr.SR_RETURNED_DATE_SK
-                LEFT JOIN (
-                    SELECT SR_CUSTOMER_SK,
-                           COUNT(DISTINCT SR_TICKET_NUMBER) AS RETURN_COUNT
-                    FROM SYNTHETIC_COMPANYDB.COMPANY.STORE_RETURNS
-                    WHERE SR_CUSTOMER_SK IS NOT NULL
-                    GROUP BY SR_CUSTOMER_SK
-                ) rc ON rc.SR_CUSTOMER_SK = sr.SR_CUSTOMER_SK
             ORDER BY sr.SR_RETURNED_DATE_SK DESC, sr.SR_TICKET_NUMBER
             LIMIT {limit} OFFSET {offset}
             """
         )
 
-        # Deduplicate by ticket number, keeping highest net_loss row
-        seen: dict[str, Any] = {}
-        for row in rows:
-            key = str(row.get("SR_TICKET_NUMBER") or id(row))
-            existing = seen.get(key)
-            net_loss = float(row.get("SR_NET_LOSS") or 0)
-            if not existing or net_loss > float(existing.get("SR_NET_LOSS") or 0):
-                seen[key] = row
-
-        tickets = [_map_row_to_ticket(r, i) for i, r in enumerate(seen.values())]
+        tickets = [_map_row_to_ticket(r, i) for i, r in enumerate(rows)]
         return TicketListResponse(tickets=tickets, total=len(tickets))
 
     except Exception as exc:
@@ -350,24 +296,24 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
     return_amt  = float(row.get("SR_RETURN_AMT")      or 0)
     net_loss    = float(row.get("SR_NET_LOSS")         or 0)
     return_qty  = int(row.get("SR_RETURN_QUANTITY")    or 1)
+    ticket_date_key = row.get("SR_RETURNED_DATE_SK")
 
-    first_name  = row.get("C_FIRST_NAME")   or ""
-    last_name   = row.get("C_LAST_NAME")    or ""
-    email       = row.get("C_EMAIL_ADDRESS") or f"customer-{ticket_num}@unknown.com"
-    preferred   = row.get("C_PREFERRED_CUST_FLAG") == "Y"
-
-    reason_desc = row.get("R_REASON_DESC") or f"Reason #{row.get('SR_REASON_SK', 'unknown')}"
-    return_date = row.get("D_DATE")
-
-    product_name    = row.get("I_PRODUCT_NAME")   or f"Item #{row.get('SR_ITEM_SK', 'unknown')}"
-    category        = row.get("I_CATEGORY")       or "General"
-    category_full   = row.get("I_CATEGORY_FULL")  or category
-    item_class      = row.get("I_CLASS")          or ""
-    item_brand      = row.get("I_BRAND")          or ""
-    item_price      = float(row.get("I_CURRENT_PRICE") or 0)
-    item_list_price = float(row.get("I_LIST_PRICE")    or item_price)
-    item_desc       = (row.get("I_ITEM_DESC") or "")[:300]
-    item_url        = row.get("I_PRODUCT_URL") or ""
+    customer_sk = row.get("SR_CUSTOMER_SK")
+    item_sk = row.get("SR_ITEM_SK")
+    reason_desc = row.get("SR_RESOLUTION") or f"Reason #{row.get('SR_REASON_SK', 'unknown')}"
+    preferred = False
+    product_name = f"Return Item #{item_sk or 'unknown'}"
+    category = "Returns"
+    category_full = category
+    item_class = ""
+    item_brand = ""
+    item_price = 0.0
+    item_list_price = 0.0
+    item_desc = ""
+    item_url = ""
+    customer_name = f"Customer #{customer_sk or 'unknown'}"
+    customer_email = f"customer-{customer_sk or ticket_num or idx + 1}@unknown.com"
+    customer_tier = "Bronze"
 
     ticket_id = f"TKT-{ticket_num or idx + 1}"
 
@@ -385,11 +331,6 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
     escalation = ["high_value_return"] if (net_loss > 500 or return_qty > 5) else []
     triage_data = _build_triage(reason_desc, category, item_price, return_amt, return_qty, net_loss, preferred)
 
-    tier = (
-        "Gold"   if preferred and return_amt > 300 else
-        "Silver" if preferred else "Bronze"
-    )
-
     override = triage_data.get("priorityOverride")
     final_priority = override if override else (
         "critical" if net_loss > 500 else
@@ -398,8 +339,7 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
     )
 
     created_str = (
-        return_date.isoformat() if hasattr(return_date, "isoformat")
-        else (str(return_date) if return_date else datetime.now(timezone.utc).isoformat())
+        str(ticket_date_key) if ticket_date_key is not None else datetime.now(timezone.utc).isoformat()
     )
 
     issues = [
@@ -416,11 +356,11 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
         fee=f"{float(row.get('SR_FEE') or 0):.2f}",
         returnReason=reason_desc,
         customer=TicketCustomerModel(
-            name=f"{first_name} {last_name}".strip() or "Unknown Customer",
-            email=email,
-            tier=tier,
-            ltv=str(int(return_amt * 3.5)),
-            orders=int(row.get("CUSTOMER_ORDER_COUNT") or 0),
+            name=customer_name,
+            email=customer_email,
+            tier=customer_tier,
+            ltv="0",
+            orders=0,
         ),
         item=TicketItemModel(
             name=product_name,
@@ -434,9 +374,9 @@ def _map_row_to_ticket(row: dict, idx: int) -> TicketResponse:
             url=item_url,
             returnQty=return_qty,
         ),
-        subject=f"Return -- {product_name} ({reason_desc})",
+        subject=f"Return -- {ticket_num or idx + 1} ({reason_desc})",
         preview=(
-            f"{first_name} is returning {return_qty}x {product_name} ({category}). "
+            f"{customer_name} has a return ticket for {return_qty}x {product_name}. "
             f"Reason: {reason_desc}. Return amount: ${return_amt:.2f}."
         ),
         channel="email",

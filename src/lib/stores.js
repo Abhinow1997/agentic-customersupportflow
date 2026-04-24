@@ -1,36 +1,70 @@
 // src/lib/stores.js
-import { writable, derived } from 'svelte/store'; // derived still used for selectedTicket
+import { writable, derived, get } from 'svelte/store'; // derived still used for selectedTicket
 import { MOCK_TICKETS } from './data.js';
 
-// Auth store — persisted to sessionStorage so HMR reloads and refreshes don't wipe the login
-function makePersistedSession() {
-  let initial = null;
+function makePersistedJSONStore(storageKey, initialValue) {
+  let initial = initialValue;
   if (typeof sessionStorage !== 'undefined') {
-    try { initial = JSON.parse(sessionStorage.getItem('arcella_session')); } catch {}
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw !== null) initial = JSON.parse(raw);
+    } catch {}
   }
+
   const store = writable(initial);
   store.subscribe(val => {
     if (typeof sessionStorage !== 'undefined') {
-      if (val) sessionStorage.setItem('arcella_session', JSON.stringify(val));
-      else     sessionStorage.removeItem('arcella_session');
+      if (val === null || val === undefined) {
+        sessionStorage.removeItem(storageKey);
+      } else {
+        sessionStorage.setItem(storageKey, JSON.stringify(val));
+      }
     }
   });
+
   return store;
+}
+
+// Auth store — persisted to sessionStorage so HMR reloads and refreshes don't wipe the login
+function makePersistedSession() {
+  return makePersistedJSONStore('arcella_session', null);
 }
 export const session = makePersistedSession();
 
 // FastAPI base URL — all data + AI calls go through FastAPI
 const FASTAPI_URL = 'http://localhost:8000';
 
-// Tickets — loaded from FastAPI
-export const tickets        = writable([]);
+// Tickets — persisted so the return listing survives navigation
+export const tickets        = makePersistedJSONStore('arcella_tickets_queue_v2', []);
 export const ticketsLoading = writable(false);
 export const ticketsError   = writable('');
 
-export async function loadTickets() {
+export async function loadTickets(forceRefresh = false) {
+  const currentTickets = get(tickets);
+  if (!forceRefresh && Array.isArray(currentTickets) && currentTickets.length > 0) {
+    ticketsError.set('');
+    ticketsLoading.set(false);
+    return;
+  }
+
   ticketsLoading.set(true);
   ticketsError.set('');
   try {
+    if (!forceRefresh && typeof sessionStorage !== 'undefined') {
+      try {
+        const raw = sessionStorage.getItem('arcella_tickets_queue_v2');
+        if (raw) {
+          const cached = JSON.parse(raw);
+          if (Array.isArray(cached) && cached.length > 0) {
+            tickets.set(cached);
+            return;
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('[loadTickets] Failed to read cached queue:', cacheErr);
+      }
+    }
+
     const res = await fetch(`${FASTAPI_URL}/api/tickets?limit=50`);
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     const data = await res.json();
@@ -63,6 +97,8 @@ export const selectedTicket = derived(
 
 // Filters
 export const filters = writable({ status: 'all', priority: 'all', search: '' });
+
+export const analyticsDashboard = makePersistedJSONStore('arcella_analytics_dashboard_v2', null);
 
 export async function analyzeTicket(ticket) {
   const payload = {

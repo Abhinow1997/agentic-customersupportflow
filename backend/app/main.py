@@ -34,6 +34,7 @@ from app.routers import (
     log_decision,
     store_sales,
     recent_orders,
+    analytics,
 )
 
 settings = get_settings()
@@ -78,6 +79,7 @@ app.include_router(access_item_return.router)
 app.include_router(log_decision.router)
 app.include_router(store_sales.router)
 app.include_router(recent_orders.router)
+app.include_router(analytics.router)
 
 # ── Root ─────────────────────────────────────────────────────────────────────
 

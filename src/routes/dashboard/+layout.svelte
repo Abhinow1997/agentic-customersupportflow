@@ -15,10 +15,10 @@
 
   // Derive active nav item from current path
   $: path = $page.url.pathname;
-  $: isReturns   = path === '/dashboard' || path === '/dashboard/';
+  $: isAnalytics = path === '/dashboard' || path === '/dashboard/';
   $: isCreate    = path.startsWith('/dashboard/create');
+  $: isEnquiries = path.startsWith('/dashboard/enquiries');
   $: isInstagramPosts = path.startsWith('/dashboard/instagram-posts');
-  $: isAnalytics = false;
   $: isPolicy    = false;
 </script>
 
@@ -35,11 +35,11 @@
     <nav class="nav">
       <div class="nav-section-label">Queues</div>
 
-      <a href="/dashboard" class="nav-item" class:active={isReturns}>
+      <a href="/dashboard" class="nav-item" class:active={isAnalytics}>
         <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
           <path d="M16 17l-4 4-4-4m0-10l4-4 4 4M3 12h18"/>
         </svg>
-        Returned Items
+        Analytics
       </a>
 
       <a href="/dashboard/create" class="nav-item" class:active={isCreate}>
@@ -47,6 +47,13 @@
           <path d="M12 4v16m8-8H4"/>
         </svg>
         Create Ticket
+      </a>
+
+      <a href="/dashboard/enquiries" class="nav-item" class:active={isEnquiries}>
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+        Customer Enquiries
       </a>
 
       <div class="nav-section-label" style="margin-top:12px">Tools</div>

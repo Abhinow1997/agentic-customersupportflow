@@ -180,6 +180,7 @@ async def log_decision(payload: LogDecisionRequest) -> LogDecisionResponse:
             %s, %s,
             %s, %s, %s,
             %s,
+            %s,
             %s, %s
         )
         """

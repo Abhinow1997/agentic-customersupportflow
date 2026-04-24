@@ -426,7 +426,6 @@ User 7`,
       if (!response.ok) throw new Error(formatApiError(data, `HTTP ${response.status}`));
       const normalizedResult = normalizeEnquiryAnalysisResult(data, enquiryPayload);
       enquiryAnalysisResult = normalizedResult;
-      await saveAnalyzedEnquiry(enquiryPayload, normalizedResult);
     } catch (err) {
       enquiryAnalysisError = err.message;
     } finally {
@@ -952,6 +951,20 @@ User 7`,
               {/if}
 
               {#if enquiryAnalysisResult}
+                <div class="analysis-actions">
+                  <button
+                    class="btn btn-submit enquiry-save"
+                    disabled={enquirySaving}
+                    on:click={() => saveAnalyzedEnquiry(buildEnquiryAnalysisPayload(), enquiryAnalysisResult)}
+                  >
+                    {#if enquirySaving}
+                      <span class="spinner-sm"></span> Saving to Snowflake...
+                    {:else}
+                      Save Enquiry to Snowflake
+                    {/if}
+                  </button>
+                </div>
+
                 <div class="review-grid">
                   <div class="review-item">
                     <span class="review-label">Category</span>
@@ -1731,6 +1744,15 @@ User 7`,
     border: 1px solid rgba(224,92,92,0.3);
     background: var(--red-dim);
     color: var(--red);
+  }
+
+  .analysis-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: 10px 0 14px;
+  }
+  .enquiry-save {
+    min-width: 220px;
   }
 
   /* Priority tags */

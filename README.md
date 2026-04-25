@@ -97,12 +97,12 @@ The app will usually run at `http://localhost:5173`.
 
 The frontend is configured for Vercel deployment, and the backend should be deployed separately as a FastAPI service.
 
-Replace the placeholders below with your live URLs:
-
-- Frontend: `https://agentic-customersupportflow.vercel.app`
-- Backend API: `https://agentic-customersupportflow.onrender.com`
-- Backend docs: `https://agentic-customersupportflow.onrender.com/docs`
-- Backend health check: `https://agentic-customersupportflow.onrender.com/health`
+- Frontend: [https://agentic-customersupportflow.vercel.app](https://agentic-customersupportflow.vercel.app)
+- Backend API: [https://agentic-customersupportflow.onrender.com](https://agentic-customersupportflow.onrender.com)
+- Backend docs: [https://agentic-customersupportflow.onrender.com/docs](https://agentic-customersupportflow.onrender.com/docs)
+- Backend health check: [https://agentic-customersupportflow.onrender.com/health](https://agentic-customersupportflow.onrender.com/health)
+- Video Recording: [Video demo link](https://northeastern-my.sharepoint.com/:v:/g/personal/gangurde_a_northeastern_edu/IQA-Ko-FftDXSqe68uhJd4SJAbFrugrCqwcTag-_xpTeXk4?e=SCbGvc)
+- Webpage Explainer: [https://agentic-customersupportflow.vercel.app/project-showcase](https://agentic-customersupportflow.vercel.app/project-showcase)
 
 If you deploy the backend to a different host, update `PUBLIC_FASTAPI_URL` in your environment so the frontend points to the live API instead of `http://localhost:8000`.
 
@@ -115,8 +115,6 @@ Shows summary analytics and overall support health.
 ### Architecture Flow
 
 The architecture diagram below shows how the frontend, backend, Snowflake, and agent workflows connect across the project:
-
-![Architecture flow diagram](static/images/mermaid-architecture-diagram.svg)
 
 In short:
 
@@ -135,15 +133,35 @@ Handles return-ticket creation and related customer lookup workflows.
 This is the main enquiry workflow:
 
 1. Paste an email, chat transcript, or voicemail transcript
-2. Click `Analyze Enquiry`
-3. Backend classifies the enquiry category and subcategory
-4. Backend calls the matching Snowflake procedure
-5. The returned Snowflake data is treated as the source of truth
-6. The UI shows the draft response, validation questions, and source rows for review
+2. If the input is a voicemail, the frontend transcribes it to text first
+3. Click `Analyze Enquiry`
+4. The backend classifies the enquiry into one of seven supported categories
+5. The matching Snowflake procedure is selected as the source of truth
+6. The returned Snowflake data is used to ground the reply and validation checks
+7. The UI shows the draft response, validation questions, and source rows for review
+
+In practice, the enquiry workflow works like this:
+
+1. The user gives an email, text message, or voicemail about a support issue.
+2. Voicemail input is converted into text so the downstream LLM and Snowflake logic can work on one consistent format.
+3. The response agent identifies the right enquiry category from the seven supported buckets.
+4. The workflow calls the matching Snowflake procedure for that category and uses the returned data as the source of truth.
+5. A draft reply is produced from the classified issue, customer context, and procedure output.
+6. The frontend presents the draft, the supporting source rows, and any validation questions so the user can review before sending.
+
+![Enquiry classification pipeline](static/images/mermaid-diagram-enquiry.svg)
 
 ### Instagram Posts Creation
 
-Uses crewAI + Snowflake context to draft social content and generate a visual suggestion with OpenAI image generation.
+Uses the Instagram agentic pipeline to validate product data in Snowflake, summarize the campaign brief, generate content, iterate with critique, and produce a visual suggestion with OpenAI image generation.
+
+![Instagram agentic pipeline](static/images/mermaid-diagram-instaflow.svg)
+
+### Create Return Ticket
+
+The return workflow looks up the customer claim, pulls recent purchase and item metadata from Snowflake, runs the seven return guardrails through the researcher-policy loop, and returns a confidence-based assessment for approve, deny, or manual review.
+
+![Return assessment pipeline](static/images/mermaid-diagram-returnticket.svg)
 
 ## API Overview
 

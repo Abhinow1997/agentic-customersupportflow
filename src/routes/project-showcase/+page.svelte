@@ -5,24 +5,34 @@
 
   const keyFeatures = [
     {
-      title: 'Agentic customer support flow',
+      title: 'Instagram content generation flow',
       description:
-        'Routes issues through a multi-agent pipeline that can triage, verify, summarize, and draft responses with human-in-the-loop control.'
+        'Takes a product item, campaign direction, and user requirements through a validator, summarizer, content generator, critique loop, and visualizer.'
     },
     {
-      title: 'Instagram campaign generator',
+      title: 'Create return ticket flow',
       description:
-        'Turns a product lookup plus creative direction into a structured Instagram campaign, complete with live workflow output and image generation.'
+        'Looks up the customer and product context, checks the seven return guardrails, and scores the return with policy-backed confidence.'
+    },
+    {
+      title: 'Customer enquiry workflow',
+      description:
+        'Classifies email, text, or voicemail enquiries into seven categories, routes them to the right Snowflake procedure, and drafts a grounded response.'
+    },
+    {
+      title: 'Support operations dashboard',
+      description:
+        'Supports ticket creation, enquiries, return triage, and analytics in the same application.'
     },
     {
       title: 'Snowflake-backed item lookup',
       description:
-        'Pulls live item details from the product dataset so the workflow can ground marketing content in real catalog data.'
+        'Pulls live item metadata from Snowflake so the Instagram workflow can validate the item before generating content.'
     },
     {
-      title: 'Streamed agent output',
+      title: 'Agentic iteration loop',
       description:
-        'Exposes the Instagram workflow as a streaming experience so users can see each agent stage as it completes.'
+        'Lets the content agent and critique agent work back and forth for a defined number of rounds before the final visual is created.'
     }
   ];
 
@@ -48,24 +58,92 @@
     {
       title: '1. User starts in the frontend',
       description:
-        'The SvelteKit app provides the login screen, dashboard, return workflow, enquiry flow, and Instagram workflow entry points.'
+        'The SvelteKit app lets the user open the Instagram page, look up an item, and enter the campaign details.'
     },
     {
-      title: '2. Frontend calls FastAPI',
+      title: '2. Frontend sends campaign inputs',
       description:
-        'Each major action triggers a backend route for tickets, analytics, items, enquiries, or campaign generation.'
+        'The item SK, method section content, and campaign caption are sent to the Instagram workflow endpoint.'
     },
     {
-      title: '3. FastAPI talks to Snowflake and agents',
+      title: '3. Validator and summarizer prepare the brief',
       description:
-        'The backend reads operational data from Snowflake and coordinates the agent flows that analyze, validate, and draft responses.'
+        'The validator agent checks item availability and metadata in Snowflake, then the summarizing agent merges those facts with the user requirements.'
     },
     {
-      title: '4. Agent output returns to the UI',
+      title: '4. Content, critique, and visual generation',
       description:
-        'Draft replies, summaries, status updates, and streamed content are sent back for review in the dashboard.'
+        'The content agent drafts the campaign, the critique agent improves it in a loop, and the visualizer generates the final image prompt or visual asset.'
     }
   ];
+
+  const returnFlow = [
+    {
+      title: '1. User submits a return claim',
+      description:
+        'The agent starts with the customer claim, the item being returned, packaging condition, return quantity, and customer remarks.'
+    },
+    {
+      title: '2. Snowflake lookup grounds the case',
+      description:
+        'The backend looks up the customer’s recent purchase and item metadata from Snowflake so the assessment starts from real transaction data.'
+    },
+    {
+      title: '3. Researcher agent checks seven guardrails',
+      description:
+        'The researcher agent evaluates the claim against seven policy checks, asking follow-up questions when the evidence is incomplete.'
+    },
+    {
+      title: '4. Policy validation adjusts confidence',
+      description:
+        'Each answer is validated against policy logic, and the result is converted into a confidence score that reflects how strong the return case is.'
+    }
+  ];
+
+  const returnFlowMermaid = `flowchart TD
+  U[Customer / Agent] --> F[Create Return Ticket Page]
+  F --> C[Claim Details]
+  F --> R[Recent Purchase Lookup]
+  R --> S[(Snowflake Purchase + Item Data)]
+  C --> RE[Researcher Agent]
+  S --> RE
+  RE --> P[Policy Agent]
+  P --> RE
+  RE --> SCO[Confidence Score]
+  SCO --> O[Approve, Deny, or Review]`;
+
+  const enquiryFlow = [
+    {
+      title: '1. User submits an enquiry',
+      description:
+        'The user provides an email, text message, or voicemail transcript describing the problem or question.'
+    },
+    {
+      title: '2. Voicemail is transcribed when needed',
+      description:
+        'If the input is audio, the system transcribes it to text so the rest of the workflow can treat every enquiry in a consistent format.'
+    },
+    {
+      title: '3. The enquiry is classified',
+      description:
+        'The response agent identifies one of the seven supported enquiry categories and determines which source-of-truth procedure should be used.'
+    },
+    {
+      title: '4. Snowflake procedure and draft response',
+      description:
+        'The matching Snowflake procedure returns the validation data, and the agent uses it to generate a grounded draft response for review.'
+    }
+  ];
+
+  const enquiryFlowMermaid = `flowchart TD
+  U[User] --> F[Enquiry Input]
+  F --> T[Voicemail Transcription]
+  T --> X[Text Enquiry]
+  X --> CL[Classify into 7 Categories]
+  CL --> P[Select Snowflake Procedure]
+  P --> S[(Snowflake Source of Truth)]
+  S --> D[Draft Response Agent]
+  D --> O[Reviewable Reply for the User]`;
 </script>
 
 <svelte:head>
@@ -84,8 +162,8 @@
     <div class="eyebrow">Assignment Final Project</div>
     <h1>Agentic Customer Support Flow</h1>
     <p class="lead">
-      A full-stack demo that blends customer support automation, product lookup, and Instagram
-      campaign generation into one agentic workflow.
+      A full-stack demo that blends customer enquiries, return assessment, and Instagram content
+      generation into one agentic application.
     </p>
 
     <div class="hero-actions">
@@ -95,8 +173,8 @@
 
     <div class="hero-stats">
       <div class="stat">
-        <span>2</span>
-        <p>main experiences: support flow and Instagram marketing flow</p>
+        <span>3</span>
+        <p>main experiences: enquiries, return flow, and Instagram marketing flow</p>
       </div>
       <div class="stat">
         <span>FastAPI</span>
@@ -112,7 +190,7 @@
   <section class="section" id="features">
     <div class="section-head">
       <div class="section-label">Key Features</div>
-      <h2>What the project demonstrates</h2>
+      <h2>What the Instagram flow demonstrates</h2>
     </div>
 
     <div class="feature-grid">
@@ -127,15 +205,16 @@
 
   <section class="section architecture-section" id="architecture">
     <div class="section-head">
-      <div class="section-label">Architecture Flow</div>
-      <h2>How the system moves data end to end</h2>
+      <div class="section-label">Instagram Agentic Pipeline</div>
+      <h2>The Instagram agentic campaign pipeline</h2>
     </div>
 
     <div class="architecture-grid">
-      <div class="diagram-card">
+      <div class="diagram-card diagram-text">
+        <div class="diagram-title">Mermaid diagram</div>
         <img
-          src="/images/mermaid-architecture-diagram.svg"
-          alt="Architecture flow diagram showing the Svelte frontend, FastAPI backend, Snowflake, and agent workflows"
+          src="/images/mermaid-diagram-instaflow.svg"
+          alt="Instagram agentic pipeline diagram showing item lookup, validator, summarizer, content generation, critique, and visualizer steps"
         />
       </div>
 
@@ -146,6 +225,85 @@
             <p>{step.description}</p>
           </article>
         {/each}
+
+        <article class="flow-card highlight-card">
+          <h3>Why this flow matters</h3>
+          <p>
+            The user only provides a product item and campaign direction. The system then grounds
+            the campaign in catalog data, refines the copy through critique cycles, and finishes
+            with a visual prompt for the final post concept.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section architecture-section">
+    <div class="section-head">
+      <div class="section-label">Create Return Ticket</div>
+      <h2>The return assessment pipeline</h2>
+    </div>
+
+    <div class="architecture-grid">
+      <div class="diagram-card diagram-text">
+        <div class="diagram-title">Mermaid diagram</div>
+        <img
+          src="/images/mermaid-diagram-returnticket.svg"
+          alt="Return assessment pipeline diagram showing claim details, Snowflake lookup, researcher agent, policy agent, and confidence score"
+        />
+      </div>
+
+      <div class="flow-list">
+        {#each returnFlow as step}
+          <article class="flow-card">
+            <h3>{step.title}</h3>
+            <p>{step.description}</p>
+          </article>
+        {/each}
+
+        <article class="flow-card highlight-card">
+          <h3>Why this flow matters</h3>
+          <p>
+            This pipeline reduces guesswork by grounding the claim in purchase history, checking
+            policy guardrails, and turning the result into a confidence-driven recommendation for
+            approve, deny, or manual review.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section architecture-section">
+    <div class="section-head">
+      <div class="section-label">Customer Enquiries</div>
+      <h2>The enquiry classification and reply pipeline</h2>
+    </div>
+
+    <div class="architecture-grid">
+      <div class="diagram-card diagram-text">
+        <div class="diagram-title">Mermaid diagram</div>
+        <img
+          src="/images/mermaid-diagram-enquiry.svg"
+          alt="Enquiry classification pipeline diagram showing transcription, classification into seven categories, Snowflake procedure selection, and draft response generation"
+        />
+      </div>
+
+      <div class="flow-list">
+        {#each enquiryFlow as step}
+          <article class="flow-card">
+            <h3>{step.title}</h3>
+            <p>{step.description}</p>
+          </article>
+        {/each}
+
+        <article class="flow-card highlight-card">
+          <h3>Why this flow matters</h3>
+          <p>
+            This workflow turns unstructured enquiries into a structured support process by
+            classifying the issue, selecting the correct Snowflake-backed procedure, and drafting a
+            response that stays grounded in source-of-truth data.
+          </p>
+        </article>
       </div>
     </div>
   </section>
@@ -373,6 +531,29 @@
     padding: 18px;
   }
 
+  .diagram-text pre {
+    margin: 0;
+    padding: 18px;
+    overflow: auto;
+    background: rgba(5, 10, 18, 0.74);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    color: #d7e3ff;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .diagram-title {
+    margin: 0 0 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #9cc7ff;
+  }
+
   .diagram-card img {
     display: block;
     width: 100%;
@@ -400,6 +581,11 @@
     margin: 0;
     color: var(--text-secondary);
     line-height: 1.65;
+  }
+
+  .highlight-card {
+    border-color: rgba(255, 194, 32, 0.22);
+    background: linear-gradient(180deg, rgba(18, 23, 34, 0.82), rgba(9, 16, 29, 0.72));
   }
 
   .feature-card h3,
